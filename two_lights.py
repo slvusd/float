@@ -1,6 +1,7 @@
 import RPi.GPIO as GPIO
 import time
 
+
 # Pin Definitions
 LED_PIN_1 = 23
 LED_PIN_2 = 24
@@ -18,23 +19,20 @@ GPIO.setup(LED_PIN_2, GPIO.OUT)
 
 print("Turning on both LEDs for 5 seconds. Press CTRL+C to exit.")
 
-try:
-    # Turn on both LEDs (set to HIGH/True)
-    GPIO.output(LED_PIN_1, GPIO.HIGH)
-    GPIO.output(LED_PIN_2, GPIO.HIGH)
-    
-    # Wait for 5 seconds
-    time.sleep(5)
-    
-    # Turn off both LEDs (set to LOW/False)
-    GPIO.output(LED_PIN_1, GPIO.LOW)
-    GPIO.output(LED_PIN_2, GPIO.LOW)
+def f(state):
+    if state == 0:
+        GPIO.output(LED_PIN_1, GPIO.HIGH)
+        GPIO.output(LED_PIN_2, GPIO.HIGH)
+    elif state == 1:
+        GPIO.output(LED_PIN_1, GPIO.HIGH)
 
-except KeyboardInterrupt:
-    # Trap a CTRL+C keyboard interrupt
-    pass
+f(0)
+time.sleep(1)
+f(1)
+time.sleep(1)
+f(2)
+time.sleep(1)
 
-finally:
     # Resets all GPIO ports used by this program to their default state
-    GPIO.cleanup()
+GPIO.cleanup()
 
