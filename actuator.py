@@ -51,14 +51,11 @@ def stopActuator():
          print("GPIO is not setup when stopping actuator")
 
 
-setupActuator()
-retractActuator()
-time.sleep(2)
-extendActuator()
-time.sleep(1)
-stopActuator()
-time.sleep(1)
-extendActuator()
-time.sleep(1)
-stopActuator()
-
+#setupActuator()
+#retractActuator()
+#time.sleep(3)
+#for i in range(0, 10):
+#    extendActuator()
+#    time.sleep(0.1)
+#    stopActuator()
+#    time.sleep(1)
