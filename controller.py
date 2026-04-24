@@ -272,6 +272,7 @@ def receive():
     with open(DATA_PATH, 'w') as f:
         f.write(data)
     packets = max(0, data.count('\n') - 1)
+    print(f"[receive] data from {request.remote_addr} — {packets} packets stored", flush=True)
     return jsonify({'status': 'received', 'packets': packets})
 
 
@@ -285,8 +286,10 @@ def fetch():
         with open(DATA_PATH, 'wb') as f:
             f.write(r.content)
         packets = max(0, r.text.count('\n') - 1)
+        print(f"[fetch] pulled {packets} packets from float", flush=True)
         return jsonify({'status': 'fetched', 'packets': packets})
     except Exception as e:
+        print(f"[fetch] failed: {e}", flush=True)
         return jsonify({'error': str(e)}), 503
 
 
