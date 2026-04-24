@@ -194,6 +194,7 @@ def index():
     <div id="msg"></div>
     <button class="btn-primary" onclick="floatCmd('POST','/calibrate')">&#x1F4CF; Calibrate bias</button>
     <button class="btn-primary" onclick="floatCmd('POST','/start')">&#x25B6; Start mission</button>
+    <button class="btn-warn"    onclick="floatCmd('POST','/start?test=true')">&#x1F9EA; Test run</button>
     <button class="btn-danger"  onclick="floatCmd('POST','/stop')">&#x23F9; Stop actuator</button>
     <br>
     <button class="btn-neutral" onclick="floatCmd('POST','/extend?duration=10')">&#x2193; Extend 10s</button>

@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 import os
@@ -10,6 +11,13 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S)
+
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument('--test', action='store_true',
+                     help='Test mode: surface after profiles for manual retrieval')
+_args, _ = _parser.parse_known_args()
+# CLI flag overrides config, but config default still applies when not passed
+_test_mode = _args.test or TEST_MODE
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
@@ -199,7 +207,7 @@ def main():
     print("\nProfiles complete. Actuator stopped.")
     actuator.stopActuator()
 
-    if TEST_MODE:
+    if _test_mode:
         print(f"\nTEST MODE: waiting {TEST_SURFACE_DELAY_S}s then surfacing for manual retrieval...")
         time.sleep(TEST_SURFACE_DELAY_S)
         print(f"Surfacing — extending for {TEST_SURFACE_EXTEND_S}s...")

@@ -111,6 +111,7 @@ def index():
     <div id="msg"></div>
     <button class="btn-primary" onclick="api('POST','/calibrate')">&#x1F4CF; Calibrate bias</button>
     <button class="btn-primary" onclick="api('POST','/start')">&#x25B6; Start mission</button>
+    <button class="btn-warn"    onclick="api('POST','/start?test=true')">&#x1F9EA; Test run</button>
     <br>
     <label>Extend <input type="number" id="ext-dur" value="10" min="1" max="60"> s</label>
     <button class="btn-neutral" onclick="api('POST','/extend?duration='+document.getElementById('ext-dur').value)">&#x2193; Extend</button>
@@ -290,9 +291,12 @@ def start_mission():
     global _mission_proc
     if _mission_running():
         return jsonify({'error': 'Mission already running'}), 409
+    test = request.args.get('test', '').lower() in ('1', 'true', 'yes')
     script = os.path.join(BASE_DIR, 'depthadjust.py')
-    _mission_proc = subprocess.Popen([sys.executable, script], cwd=BASE_DIR)
-    return jsonify({'status': 'mission started', 'pid': _mission_proc.pid})
+    cmd = [sys.executable, script] + (['--test'] if test else [])
+    _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
+    return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
+                    'test_mode': test})
 
 
 @app.route('/status')
