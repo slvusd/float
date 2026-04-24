@@ -6,13 +6,16 @@ CURRENT_USER="$(whoami)"
 
 echo "Installing float in $SCRIPT_DIR as user $CURRENT_USER..."
 
-# System dependencies (no internet required — uses local apt cache)
-sudo apt-get install -y python3-rpi-lgpio python3-smbus2
+# All dependencies via apt — no pip/internet needed
+sudo apt-get install -y \
+    python3-rpi-lgpio \
+    python3-smbus2 \
+    python3-flask \
+    python3-matplotlib \
+    python3-numpy
 
-# Venv + pip packages (requires internet on first run)
+# Venv with access to apt-installed packages (no pip install needed)
 python3 -m venv --system-site-packages "$SCRIPT_DIR/venv"
-"$SCRIPT_DIR/venv/bin/pip" install --upgrade pip -q
-"$SCRIPT_DIR/venv/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" -q
 
 # Install systemd service
 sed "s|FLOAT_USER|$CURRENT_USER|g; s|FLOAT_DIR|$SCRIPT_DIR|g" \

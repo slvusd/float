@@ -1,9 +1,8 @@
-# pip packages (requires internet on first install)
-flask
-matplotlib
-
-# System packages installed via apt (no internet required):
+# All packages installed via apt in install.sh (no pip required):
 #   python3-rpi-lgpio  — GPIO / H-bridge control
 #   python3-smbus2     — I2C bus for depth sensor
+#   python3-flask      — REST API server
+#   python3-matplotlib — plot generation
+#   python3-numpy      — matplotlib dependency
 #
 # ms5837 sensor library is vendored in ms5837/
