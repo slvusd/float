@@ -12,7 +12,8 @@ sudo apt-get install -y \
     python3-smbus2 \
     python3-flask \
     python3-matplotlib \
-    python3-numpy
+    python3-numpy \
+    python3-requests
 
 # Venv with access to apt-installed packages (no pip install needed)
 python3 -m venv --system-site-packages "$SCRIPT_DIR/venv"

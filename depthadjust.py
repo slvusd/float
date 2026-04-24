@@ -8,7 +8,7 @@ import depthdetect as depth
 from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     HOLD_SECONDS, PACKET_INTERVAL_S, PACKETS_REQUIRED,
                     NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES,
-                    BIAS_FILE, DATA_FILE)
+                    BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
@@ -124,6 +124,20 @@ def transmitData(packets):
     print("\n--- Transmitting data ---")
     for p in packets:
         print(" ", p)
+
+    if not os.path.exists(DATA_PATH):
+        print("No data file to transmit.")
+        return
+
+    try:
+        import requests
+        url = f"http://{CONTROLLER_IP}:{CONTROLLER_PORT}/receive"
+        with open(DATA_PATH, 'rb') as f:
+            r = requests.post(url, data=f,
+                              headers={'Content-Type': 'text/csv'}, timeout=10)
+        print(f"Transmitted to controller: {r.status_code} {r.text}")
+    except Exception as e:
+        print(f"Could not reach controller ({CONTROLLER_IP}:{CONTROLLER_PORT}): {e}")
 
 
 def main():

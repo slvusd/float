@@ -1,0 +1,13 @@
+[Unit]
+Description=Float Controller Server
+After=multi-user.target
+
+[Service]
+User=FLOAT_USER
+WorkingDirectory=FLOAT_DIR
+ExecStart=FLOAT_DIR/venv/bin/python FLOAT_DIR/controller.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

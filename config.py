@@ -32,3 +32,9 @@ CALIBRATION_SAMPLES = 10
 
 # Actuator test — seconds to run each direction
 ACTUATOR_TEST_DURATION_S = 8
+
+# Network
+FLOAT_IP        = "192.168.3.120"
+FLOAT_PORT      = 5000
+CONTROLLER_IP   = "192.168.3.46"
+CONTROLLER_PORT = 5001
