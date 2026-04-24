@@ -1,6 +1,6 @@
 # GPIO pin assignments (BCM numbering)
-ACTUATOR_PIN_NEGATIVE_BCM   = 23
-ACTUATOR_PIN_POSITIVE_BCM   = 24
+ACTUATOR_PIN_NEGATIVE_BCM   = 24
+ACTUATOR_PIN_POSITIVE_BCM   = 23
 ACTUATOR_PIN_ENABLE_BCM     = 27   # H-bridge enable pin
 
 # GPIO pin assignments (BOARD numbering)
