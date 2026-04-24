@@ -977,7 +977,8 @@ def network():
 GPIO.setwarnings(False)
 # Actuator GPIO is NOT held at startup — claimed per-request so the
 # mission subprocess (depthadjust.py) can always claim the pins cleanly.
-depth_sensor.initSensor()
+if not depth_sensor.initSensor():
+    print("WARNING: depth sensor not available at startup — will retry on first /depth request")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)

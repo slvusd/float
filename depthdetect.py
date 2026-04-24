@@ -13,11 +13,15 @@ def initSensor():
     if sensor is None:
         print("Failed to create sensor")
         return False
-
-    if not sensor.init():
-        print("Failed to init sensor")
+    try:
+        if not sensor.init():
+            print("Failed to init sensor")
+            sensor = None
+            return False
+    except OSError as e:
+        print(f"Sensor I2C error during init: {e}")
+        sensor = None
         return False
-
     return True
 
 def readDepthM():
@@ -46,11 +50,17 @@ def readDepthMM():
 
 def readSensor():
     """Single I2C read; returns (depth_m, pressure_kpa) or (None, None) on error."""
+    global sensor
     if sensor is None:
-        print("Attempted to read from sensor before it was initialized")
+        if not initSensor():
+            return None, None
+    try:
+        sensor.read(ms5837.OSR_8192)
+        return sensor.depth(), sensor.pressure(ms5837.UNITS_kPa)
+    except OSError as e:
+        print(f"Sensor read error: {e}")
+        sensor = None   # force re-init on next call
         return None, None
-    sensor.read(ms5837.OSR_8192)
-    return sensor.depth(), sensor.pressure(ms5837.UNITS_kPa)
 
 def readLoop():
     if (sensor == None):
