@@ -10,7 +10,7 @@ import time
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, Response
 
 import depthdetect as depth_sensor
 import actuator
@@ -50,6 +50,135 @@ def _packet_count():
         return 0
     with open(DATA_PATH) as f:
         return max(0, sum(1 for _ in f) - 1)  # minus header row
+
+
+# ── UI ───────────────────────────────────────────────────────────────────────
+
+@app.route('/')
+def index():
+    has_plot = os.path.exists(DATA_PATH) and _packet_count() >= 2
+    plot_tag = (f'<img src="/plot?t={{t}}" id="plot" style="max-width:100%;border-radius:6px">'
+                if has_plot else
+                '<p style="color:#888">No plot yet — run a mission first.</p>')
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{CALL_SIGN} Float Control</title>
+<style>
+  body{{font-family:system-ui,sans-serif;margin:0;padding:1rem 1.5rem;background:#f4f6f8;color:#1a1a2e}}
+  h1{{margin:0 0 1rem;font-size:1.4rem}}
+  .grid{{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}}
+  .card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.1)}}
+  .card h2{{margin:0 0 .6rem;font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#555}}
+  .status-row{{display:flex;justify-content:space-between;margin:.25rem 0;font-size:.95rem}}
+  .pill{{display:inline-block;padding:.15rem .6rem;border-radius:999px;font-size:.8rem;font-weight:600}}
+  .running{{background:#d4edda;color:#155724}}
+  .idle{{background:#e2e3e5;color:#383d41}}
+  button{{cursor:pointer;border:none;border-radius:6px;padding:.5rem 1rem;font-size:.9rem;font-weight:600;margin:.25rem .25rem .25rem 0}}
+  .btn-primary{{background:#0077b6;color:#fff}}
+  .btn-warn{{background:#e07b00;color:#fff}}
+  .btn-danger{{background:#c0392b;color:#fff}}
+  .btn-neutral{{background:#555;color:#fff}}
+  input[type=number]{{width:4rem;padding:.4rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem}}
+  #msg{{min-height:1.2rem;font-size:.85rem;color:#0077b6;margin:.5rem 0}}
+  .plot-card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.1)}}
+  a.dl{{font-size:.85rem;color:#0077b6}}
+</style>
+</head>
+<body>
+<h1>&#x1F4E1; {CALL_SIGN} Float Control</h1>
+
+<div class="grid">
+  <div class="card">
+    <h2>Status</h2>
+    <div class="status-row"><span>Mission</span><span id="mission-badge" class="pill idle">idle</span></div>
+    <div class="status-row"><span>Bias</span><span id="bias-val">—</span></div>
+    <div class="status-row"><span>Packets logged</span><span id="packets-val">—</span></div>
+    <div class="status-row"><span>Depth</span><span id="depth-val">—</span></div>
+    <div class="status-row"><span>Pressure</span><span id="pressure-val">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Actions</h2>
+    <div id="msg"></div>
+    <button class="btn-primary" onclick="api('POST','/calibrate')">&#x1F4CF; Calibrate bias</button>
+    <button class="btn-primary" onclick="api('POST','/start')">&#x25B6; Start mission</button>
+    <br>
+    <label>Extend <input type="number" id="ext-dur" value="10" min="1" max="60"> s</label>
+    <button class="btn-neutral" onclick="api('POST','/extend?duration='+document.getElementById('ext-dur').value)">&#x2193; Extend</button>
+    <br>
+    <label>Retract <input type="number" id="ret-dur" value="10" min="1" max="60"> s</label>
+    <button class="btn-neutral" onclick="api('POST','/retract?duration='+document.getElementById('ret-dur').value)">&#x2191; Retract</button>
+    <br>
+    <button class="btn-danger" onclick="api('POST','/stop')">&#x23F9; Stop actuator</button>
+    <br><br>
+    <a class="dl" href="/data" download>&#x2B73; Download CSV</a>
+  </div>
+</div>
+
+<div class="plot-card">
+  <h2 style="font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#555;margin:0 0 .75rem">Last Run Plot</h2>
+  <div id="plot-container">{plot_tag}</div>
+</div>
+
+<script>
+function msg(text, err) {{
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.style.color = err ? '#c0392b' : '#0077b6';
+}}
+
+function api(method, url) {{
+  msg('...');
+  fetch(url, {{method}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ msg(d.error, true); return; }}
+      msg(JSON.stringify(d));
+      refreshPlot();
+    }})
+    .catch(e => msg(e.toString(), true));
+}}
+
+function refreshStatus() {{
+  fetch('/status').then(r=>r.json()).then(d=>{{
+    const badge = document.getElementById('mission-badge');
+    badge.textContent = d.mission_running ? 'running' : 'idle';
+    badge.className = 'pill ' + (d.mission_running ? 'running' : 'idle');
+    document.getElementById('bias-val').textContent = d.bias_m.toFixed(4) + ' m';
+    document.getElementById('packets-val').textContent = d.packets_logged;
+  }});
+  fetch('/depth').then(r=>r.json()).then(d=>{{
+    if (d.depth_m !== undefined) {{
+      document.getElementById('depth-val').textContent = d.depth_m.toFixed(3) + ' m';
+      document.getElementById('pressure-val').textContent = d.pressure_kpa.toFixed(1) + ' kPa';
+    }}
+  }}).catch(()=>{{}});
+}}
+
+function refreshPlot() {{
+  const img = document.getElementById('plot');
+  if (img) {{
+    img.src = '/plot?t=' + Date.now();
+  }} else {{
+    fetch('/status').then(r=>r.json()).then(d=>{{
+      if (d.packets_logged >= 2) {{
+        document.getElementById('plot-container').innerHTML =
+          '<img src="/plot?t=' + Date.now() + '" id="plot" style="max-width:100%;border-radius:6px">';
+      }}
+    }});
+  }}
+}}
+
+refreshStatus();
+setInterval(refreshStatus, 5000);
+setInterval(refreshPlot, 30000);
+</script>
+</body>
+</html>"""
+    return Response(html, mimetype='text/html')
 
 
 # ── actuator endpoints ────────────────────────────────────────────────────────
