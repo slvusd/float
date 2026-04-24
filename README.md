@@ -87,6 +87,43 @@ If for any reason the float's push fails (wrong IP, network blip), a team member
 
 ---
 
+## Configuring a Static IP on the Float
+
+The float needs a fixed IP so the controller always knows where to reach it.
+Use `nmcli` — it's already installed and manages WiFi on the Pi.
+
+**Step 1 — find the connection name:**
+```bash
+nmcli connection show
+# Look for the wifi connection — e.g. "GL-SFT1200-668"
+```
+
+**Step 2 — assign the static IP:**
+```bash
+sudo nmcli connection modify "YOUR-CONNECTION-NAME" \
+  ipv4.method manual \
+  ipv4.addresses "192.168.3.120/24" \
+  ipv4.gateway "192.168.3.1" \
+  ipv4.dns "192.168.3.1"
+
+sudo nmcli connection up "YOUR-CONNECTION-NAME"
+```
+
+**Step 3 — verify:**
+```bash
+ip addr show wlan0   # should show 192.168.3.120
+```
+
+This persists across reboots. To revert to DHCP:
+```bash
+sudo nmcli connection modify "YOUR-CONNECTION-NAME" ipv4.method auto
+sudo nmcli connection up "YOUR-CONNECTION-NAME"
+```
+
+The float's web UI shows its current IP and whether the controller is reachable — check this before deployment.
+
+---
+
 ## Pre-Deployment Checklist
 
 ```

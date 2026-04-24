@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -16,7 +17,7 @@ import depthdetect as depth_sensor
 import actuator
 import RPi.GPIO as GPIO
 from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M,
-                    BIAS_FILE, DATA_FILE)
+                    BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT)
 
 app = Flask(__name__)
 
@@ -76,6 +77,9 @@ def index():
   .pill{{display:inline-block;padding:.15rem .6rem;border-radius:999px;font-size:.8rem;font-weight:600}}
   .running{{background:#d4edda;color:#155724}}
   .idle{{background:#e2e3e5;color:#383d41}}
+  .online{{background:#d4edda;color:#155724}}
+  .offline{{background:#f8d7da;color:#721c24}}
+  .warn{{background:#fff3cd;color:#856404}}
   button{{cursor:pointer;border:none;border-radius:6px;padding:.5rem 1rem;font-size:.9rem;font-weight:600;margin:.25rem .25rem .25rem 0}}
   .btn-primary{{background:#0077b6;color:#fff}}
   .btn-warn{{background:#e07b00;color:#fff}}
@@ -93,6 +97,8 @@ def index():
 <div class="grid">
   <div class="card">
     <h2>Status</h2>
+    <div class="status-row"><span>Network</span><span id="net-badge" class="pill idle">checking…</span>&nbsp;<span id="net-ip" style="font-size:.8rem;color:#888"></span></div>
+    <div class="status-row"><span>Controller</span><span id="ctrl-badge" class="pill idle">checking…</span></div>
     <div class="status-row"><span>Mission</span><span id="mission-badge" class="pill idle">idle</span></div>
     <div class="status-row"><span>Bias</span><span id="bias-val">—</span></div>
     <div class="status-row"><span>Packets logged</span><span id="packets-val">—</span></div>
@@ -172,8 +178,23 @@ function refreshPlot() {{
   }}
 }}
 
+function refreshNetwork() {{
+  fetch('/network').then(r=>r.json()).then(d=>{{
+    const nb = document.getElementById('net-badge');
+    nb.textContent = d.online ? 'online' : 'offline';
+    nb.className   = 'pill ' + (d.online ? 'online' : 'offline');
+    document.getElementById('net-ip').textContent = d.ip ? d.ip : '';
+
+    const cb = document.getElementById('ctrl-badge');
+    cb.textContent = d.controller_reachable ? 'reachable' : 'unreachable';
+    cb.className   = 'pill ' + (d.controller_reachable ? 'online' : (d.online ? 'warn' : 'offline'));
+  }}).catch(()=>{{}});
+}}
+
 refreshStatus();
+refreshNetwork();
 setInterval(refreshStatus, 5000);
+setInterval(refreshNetwork, 10000);
 setInterval(refreshPlot, 30000);
 </script>
 </body>
@@ -326,6 +347,36 @@ def get_plot():
     plt.close(fig)
     buf.seek(0)
     return send_file(buf, mimetype='image/jpeg')
+
+
+# ── network status ───────────────────────────────────────────────────────────
+
+@app.route('/network')
+def network():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('192.168.3.1', 1))
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        ip = None
+
+    controller_ok = False
+    try:
+        import requests
+        r = requests.get(f"http://{CONTROLLER_IP}:{CONTROLLER_PORT}/events",
+                         timeout=2)
+        controller_ok = r.status_code == 200
+    except Exception:
+        pass
+
+    return jsonify({
+        'ip':                 ip,
+        'online':             ip is not None,
+        'controller_ip':      CONTROLLER_IP,
+        'controller_port':    CONTROLLER_PORT,
+        'controller_reachable': controller_ok,
+    })
 
 
 # ── startup ───────────────────────────────────────────────────────────────────
