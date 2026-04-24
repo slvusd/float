@@ -2,7 +2,9 @@
 import csv
 import hashlib
 import io
+import json
 import os
+from datetime import datetime
 
 import matplotlib
 matplotlib.use('Agg')
@@ -15,13 +17,47 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
 
 app = Flask(__name__)
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH  = os.path.join(BASE_DIR, 'received_data.csv')
-HASH_PATH  = os.path.join(BASE_DIR, 'received_data.hash')
-FLOAT_BASE = f"http://{FLOAT_IP}:{FLOAT_PORT}"
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH    = os.path.join(BASE_DIR, 'received_data.csv')
+HASH_PATH    = os.path.join(BASE_DIR, 'received_data.hash')
+EVENTS_PATH  = os.path.join(BASE_DIR, 'events.json')
+FLOAT_BASE   = f"http://{FLOAT_IP}:{FLOAT_PORT}"
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# ── event tracking ────────────────────────────────────────────────────────────
+
+def _now():
+    return datetime.now().strftime('%H:%M:%S')
+
+
+def _load_events():
+    if os.path.exists(EVENTS_PATH):
+        with open(EVENTS_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_events(ev):
+    with open(EVENTS_PATH, 'w') as f:
+        json.dump(ev, f, indent=2)
+
+
+def _record_mission_start():
+    _save_events({'mission_started_at': _now(), 'receive_count': 0})
+
+
+def _record_receive(is_new, packets, hsh):
+    ev = _load_events()
+    ev['receive_count'] = ev.get('receive_count', 0) + 1
+    ev['last_receive_at'] = _now()
+    ev['data_id'] = hsh
+    ev['packets'] = packets
+    if is_new:
+        ev['first_data_at'] = ev.get('first_data_at') or _now()
+    _save_events(ev)
+
+
+# ── data helpers ──────────────────────────────────────────────────────────────
 
 def _data_hash(text):
     return hashlib.md5(text.encode()).hexdigest()
@@ -35,7 +71,7 @@ def _stored_hash():
 
 
 def _save_data(text):
-    """Write CSV and update stored hash. Returns (packets, hash_short, is_new)."""
+    """Write CSV and update hash. Returns (packets, hash_short, is_new)."""
     incoming = _data_hash(text)
     is_new   = incoming != _stored_hash()
     if is_new:
@@ -45,14 +81,6 @@ def _save_data(text):
             f.write(incoming)
     packets = max(0, text.count('\n') - 1)
     return packets, incoming[:8], is_new
-
-
-def _float_status():
-    try:
-        r = req.get(f"{FLOAT_BASE}/status", timeout=2)
-        return r.json()
-    except Exception:
-        return None
 
 
 def _packet_count():
@@ -68,10 +96,8 @@ def _make_plot():
         for row in csv.DictReader(f):
             times.append(float(row['elapsed_s']))
             depths.append(float(row['depth_m']))
-
     if len(depths) < 2:
         return None
-
     fig, ax = plt.subplots(figsize=(11, 6))
     ax.plot(times, depths, 'b-o', markersize=3.5, linewidth=1.5, label='Measured depth')
     ax.invert_yaxis()
@@ -92,7 +118,6 @@ def _make_plot():
     ax.legend(fontsize=9, loc='lower right')
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-
     buf = io.BytesIO()
     fig.savefig(buf, format='jpeg', dpi=150)
     plt.close(fig)
@@ -104,13 +129,6 @@ def _make_plot():
 
 @app.route('/')
 def index():
-    packets   = _packet_count()
-    has_plot  = packets >= 2
-    float_url = FLOAT_BASE
-    plot_tag  = (f'<img src="/plot?t={{t}}" id="plot" style="max-width:100%;border-radius:6px">'
-                 if has_plot else
-                 '<p style="color:#888">No data yet — fetch from float or wait for transmission.</p>')
-
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -118,109 +136,136 @@ def index():
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{CALL_SIGN} Controller</title>
 <style>
+  *{{box-sizing:border-box}}
   body{{font-family:system-ui,sans-serif;margin:0;padding:1rem 1.5rem;background:#f0f2f5;color:#1a1a2e}}
   h1{{margin:0 0 1rem;font-size:1.4rem}}
-  .grid{{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}}
-  .card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.1)}}
-  .card h2{{margin:0 0 .6rem;font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#555}}
-  .row{{display:flex;justify-content:space-between;margin:.25rem 0;font-size:.95rem}}
-  .pill{{display:inline-block;padding:.15rem .6rem;border-radius:999px;font-size:.8rem;font-weight:600}}
+  h2{{margin:0 0 .6rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:#555;font-weight:600}}
+  .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}}
+  .card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:1rem}}
+  .row{{display:flex;justify-content:space-between;align-items:center;padding:.2rem 0;font-size:.92rem;border-bottom:1px solid #f0f0f0}}
+  .row:last-child{{border-bottom:none}}
+  .label{{color:#555}}
+  .pill{{display:inline-block;padding:.15rem .6rem;border-radius:999px;font-size:.78rem;font-weight:700}}
   .ok{{background:#d4edda;color:#155724}}
   .err{{background:#f8d7da;color:#721c24}}
   .idle{{background:#e2e3e5;color:#383d41}}
   .running{{background:#cce5ff;color:#004085}}
-  button{{cursor:pointer;border:none;border-radius:6px;padding:.5rem 1rem;font-size:.9rem;font-weight:600;margin:.25rem .25rem .25rem 0}}
+  .warn{{background:#fff3cd;color:#856404}}
+  button{{cursor:pointer;border:none;border-radius:6px;padding:.45rem .9rem;font-size:.88rem;font-weight:600;margin:.2rem .2rem .2rem 0;transition:opacity .15s}}
+  button:active{{opacity:.7}}
   .btn-primary{{background:#0077b6;color:#fff}}
   .btn-warn{{background:#e07b00;color:#fff}}
   .btn-danger{{background:#c0392b;color:#fff}}
   .btn-neutral{{background:#555;color:#fff}}
-  #msg{{min-height:1.2rem;font-size:.85rem;color:#0077b6;margin:.4rem 0}}
-  .plot-card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.1)}}
-  a.dl{{font-size:.85rem;color:#0077b6;margin-right:.75rem}}
-  a.ext{{font-size:.85rem;color:#555}}
+  #msg{{min-height:1.1rem;font-size:.82rem;color:#0077b6;margin:.3rem 0}}
+  a.dl{{font-size:.85rem;color:#0077b6;margin-right:.75rem;text-decoration:none}}
+  a.dl:hover{{text-decoration:underline}}
+  .tl-row{{display:flex;gap:.75rem;align-items:baseline;padding:.3rem 0;border-bottom:1px solid #f4f4f4;font-size:.92rem}}
+  .tl-row:last-child{{border-bottom:none}}
+  .tl-label{{color:#555;min-width:11rem}}
+  .tl-val{{font-weight:600;font-family:monospace}}
+  .tl-note{{color:#888;font-size:.8rem;margin-left:.25rem}}
+  #plot-img{{max-width:100%;border-radius:6px;display:block}}
+  table{{width:100%;border-collapse:collapse;font-size:.82rem}}
+  th{{background:#f0f2f5;padding:.4rem .6rem;text-align:left;font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:#444;position:sticky;top:0}}
+  td{{padding:.35rem .6rem;border-bottom:1px solid #f0f0f0;font-family:monospace}}
+  tr:last-child td{{border-bottom:none}}
+  .scroll{{max-height:320px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:6px}}
+  .no-data{{color:#888;font-style:italic;padding:.5rem 0}}
 </style>
 </head>
 <body>
-<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.9rem;color:#555">port {CONTROLLER_PORT}</small></h1>
+<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.85rem;color:#888">port {CONTROLLER_PORT}</small></h1>
 
-<div class="grid">
-
+<div class="grid2">
   <div class="card">
-    <h2>Float Status</h2>
-    <div class="row"><span>Connection</span><span id="float-conn" class="pill idle">checking...</span></div>
-    <div class="row"><span>Mission</span><span id="float-mission" class="pill idle">—</span></div>
-    <div class="row"><span>Bias</span><span id="float-bias">—</span></div>
-    <div class="row"><span>Packets (float)</span><span id="float-packets">—</span></div>
-    <div class="row"><span>Depth</span><span id="float-depth">—</span></div>
-    <br>
-    <a class="ext" href="{float_url}" target="_blank">&#x2197; Open float UI directly</a>
+    <h2>Float Live Status</h2>
+    <div class="row"><span class="label">Connection</span><span id="float-conn" class="pill idle">checking…</span></div>
+    <div class="row"><span class="label">Mission</span><span id="float-mission" class="pill idle">—</span></div>
+    <div class="row"><span class="label">Packets (on float)</span><span id="float-packets">—</span></div>
+    <div class="row"><span class="label">Depth</span><span id="float-depth">—</span></div>
+    <div class="row"><span class="label">Pressure</span><span id="float-pressure">—</span></div>
+    <div class="row"><span class="label">Bias</span><span id="float-bias">—</span></div>
+    <br><a href="{FLOAT_BASE}" target="_blank" style="font-size:.82rem;color:#555">&#x2197; Float UI direct</a>
   </div>
 
   <div class="card">
     <h2>Float Controls (proxied)</h2>
     <div id="msg"></div>
-    <button class="btn-primary" onclick="floatApi('POST','/calibrate')">&#x1F4CF; Calibrate</button>
-    <button class="btn-primary" onclick="floatApi('POST','/start')">&#x25B6; Start mission</button>
-    <button class="btn-danger"  onclick="floatApi('POST','/stop')">&#x23F9; Stop actuator</button>
+    <button class="btn-primary" onclick="floatCmd('POST','/calibrate')">&#x1F4CF; Calibrate bias</button>
+    <button class="btn-primary" onclick="floatCmd('POST','/start')">&#x25B6; Start mission</button>
+    <button class="btn-danger"  onclick="floatCmd('POST','/stop')">&#x23F9; Stop actuator</button>
+    <br>
+    <button class="btn-neutral" onclick="floatCmd('POST','/extend?duration=10')">&#x2193; Extend 10s</button>
+    <button class="btn-neutral" onclick="floatCmd('POST','/retract?duration=10')">&#x2191; Retract 10s</button>
     <br><br>
-    <button class="btn-neutral" onclick="floatApi('POST','/extend?duration=10')">&#x2193; Extend 10s</button>
-    <button class="btn-neutral" onclick="floatApi('POST','/retract?duration=10')">&#x2191; Retract 10s</button>
+    <button class="btn-warn" onclick="ctrlCmd('POST','/fetch')">&#x2B07; Fetch CSV from float</button>
+    &nbsp;<a class="dl" href="/data" download>&#x2B73; Download CSV</a>
   </div>
-
 </div>
 
-<div class="card" style="margin-bottom:1rem">
-  <h2>Data</h2>
-  <div class="row"><span>Packets received here</span><span id="local-packets">{packets}</span></div>
-  <br>
-  <button class="btn-warn" onclick="api('POST','/fetch')">&#x2B07; Fetch CSV from float</button>
-  <br><br>
-  <a class="dl" href="/data" download>&#x2B73; Download CSV</a>
-  <a class="dl" href="/plot" target="_blank">&#x1F4C8; Open plot</a>
+<div class="card">
+  <h2>Mission Summary</h2>
+  <div class="tl-row"><span class="tl-label">&#x25B6; Mission started</span><span class="tl-val" id="ev-start">—</span></div>
+  <div class="tl-row"><span class="tl-label">&#x2705; First data received</span><span class="tl-val" id="ev-first"><span class="pill warn">waiting…</span></span><span class="tl-note" id="ev-lag"></span></div>
+  <div class="tl-row"><span class="tl-label">&#x1F4E1; Last transmission</span><span class="tl-val" id="ev-last">—</span><span class="tl-note" id="ev-count"></span></div>
+  <div class="tl-row"><span class="tl-label">&#x1F4E6; Packets here</span><span class="tl-val" id="ev-packets">—</span></div>
+  <div class="tl-row"><span class="tl-label">&#x1F511; Data ID</span><span class="tl-val" id="ev-id" style="font-size:.78rem;color:#888">—</span></div>
 </div>
 
-<div class="plot-card">
-  <h2 style="font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#555;margin:0 0 .75rem">Plot</h2>
-  <div id="plot-container">{plot_tag}</div>
+<div class="card" id="plot-card">
+  <h2>Depth Profile Plot &nbsp;<a href="/plot" target="_blank" style="font-size:.78rem;font-weight:400;color:#0077b6">open full size</a></h2>
+  <div id="plot-container"><p class="no-data">No data yet.</p></div>
+</div>
+
+<div class="card">
+  <h2>Raw Data</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>#</th><th>Elapsed (s)</th><th>Depth (m)</th><th>Pressure (kPa)</th><th>Packet</th></tr></thead>
+      <tbody id="data-table"><tr><td colspan="5" style="color:#888;font-style:italic;padding:.5rem">No data yet.</td></tr></tbody>
+    </table>
+  </div>
 </div>
 
 <script>
+let _lastDataId = null;
+
 function msg(text, err) {{
   const el = document.getElementById('msg');
   el.textContent = text;
   el.style.color = err ? '#c0392b' : '#0077b6';
 }}
 
-function api(method, url) {{
-  msg('...');
-  fetch(url, {{method}})
-    .then(r => r.json())
-    .then(d => {{
-      if (d.error) {{ msg(d.error, true); return; }}
-      msg(JSON.stringify(d));
-      document.getElementById('local-packets').textContent = d.packets ?? '—';
-      refreshPlot();
-    }})
-    .catch(e => msg(e.toString(), true));
-}}
-
-function floatApi(method, path) {{
-  msg('...');
+function floatCmd(method, path) {{
+  msg('sending…');
   fetch('/float' + path, {{method}})
     .then(r => r.json())
     .then(d => {{
       if (d.error) {{ msg(d.error, true); return; }}
       msg(JSON.stringify(d));
+      // record mission start client-side label update happens via /events poll
     }})
     .catch(e => msg(e.toString(), true));
 }}
 
-function refreshStatus() {{
+function ctrlCmd(method, url) {{
+  msg('sending…');
+  fetch(url, {{method}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ msg(d.error, true); return; }}
+      msg(JSON.stringify(d));
+    }})
+    .catch(e => msg(e.toString(), true));
+}}
+
+function refreshFloatStatus() {{
   fetch('/float/status')
     .then(r => r.json())
     .then(d => {{
-      document.getElementById('float-conn').textContent    = 'reachable';
-      document.getElementById('float-conn').className      = 'pill ok';
+      document.getElementById('float-conn').textContent = 'reachable';
+      document.getElementById('float-conn').className   = 'pill ok';
       const mb = document.getElementById('float-mission');
       mb.textContent = d.mission_running ? 'running' : 'idle';
       mb.className   = 'pill ' + (d.mission_running ? 'running' : 'idle');
@@ -235,28 +280,79 @@ function refreshStatus() {{
   fetch('/float/depth')
     .then(r => r.json())
     .then(d => {{
-      if (d.depth_m !== undefined)
-        document.getElementById('float-depth').textContent =
-          d.depth_m.toFixed(3) + ' m  (' + d.pressure_kpa.toFixed(1) + ' kPa)';
+      if (d.depth_m !== undefined) {{
+        document.getElementById('float-depth').textContent    = d.depth_m.toFixed(3) + ' m';
+        document.getElementById('float-pressure').textContent = d.pressure_kpa.toFixed(1) + ' kPa';
+      }}
+    }})
+    .catch(() => {{}});
+}}
+
+function refreshSummary() {{
+  fetch('/events')
+    .then(r => r.json())
+    .then(ev => {{
+      document.getElementById('ev-start').textContent   = ev.mission_started_at ?? '—';
+      document.getElementById('ev-last').textContent    = ev.last_receive_at    ?? '—';
+      document.getElementById('ev-packets').textContent = ev.packets            ?? '—';
+      document.getElementById('ev-id').textContent      = ev.data_id            ?? '—';
+
+      if (ev.receive_count)
+        document.getElementById('ev-count').textContent = ev.receive_count + ' transmission(s)';
+
+      if (ev.first_data_at) {{
+        document.getElementById('ev-first').innerHTML = '<span style="font-weight:600;font-family:monospace">' + ev.first_data_at + '</span>';
+        if (ev.mission_started_at && ev.first_data_at) {{
+          document.getElementById('ev-lag').textContent = '(' + ev.lag_note + ')';
+        }}
+      }}
+
+      // Only reload plot and table when data ID changes
+      if (ev.data_id && ev.data_id !== _lastDataId) {{
+        _lastDataId = ev.data_id;
+        refreshPlot();
+        refreshTable();
+      }}
     }})
     .catch(() => {{}});
 }}
 
 function refreshPlot() {{
-  const img = document.getElementById('plot');
-  if (img) {{
-    img.src = '/plot?t=' + Date.now();
-  }} else {{
-    fetch('/status' + '').then(() => {{
-      fetch('/fetch').then(() => {{}}); // no-op check
-    }}).catch(() => {{}});
-  }}
+  const container = document.getElementById('plot-container');
+  const img = document.createElement('img');
+  img.id    = 'plot-img';
+  img.src   = '/plot?t=' + Date.now();
+  img.onerror = () => {{ container.innerHTML = '<p class="no-data">Plot not available yet.</p>'; }};
+  container.innerHTML = '';
+  container.appendChild(img);
 }}
 
-// bootstrap
-refreshStatus();
-setInterval(refreshStatus, 5000);
-setInterval(refreshPlot, 30000);
+function refreshTable() {{
+  fetch('/rawdata')
+    .then(r => r.json())
+    .then(rows => {{
+      const tbody = document.getElementById('data-table');
+      if (!rows.length) {{
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#888;font-style:italic;padding:.5rem">No data yet.</td></tr>';
+        return;
+      }}
+      tbody.innerHTML = rows.map((r, i) =>
+        `<tr>
+          <td>${{i+1}}</td>
+          <td>${{parseFloat(r.elapsed_s).toFixed(1)}}</td>
+          <td>${{parseFloat(r.depth_m).toFixed(4)}}</td>
+          <td>${{parseFloat(r.pressure_kpa).toFixed(1)}}</td>
+          <td>${{r.packet}}</td>
+        </tr>`
+      ).join('');
+    }})
+    .catch(() => {{}});
+}}
+
+refreshFloatStatus();
+refreshSummary();
+setInterval(refreshFloatStatus, 5000);
+setInterval(refreshSummary, 5000);
 </script>
 </body>
 </html>"""
@@ -269,6 +365,9 @@ setInterval(refreshPlot, 30000);
 @app.route('/float/', methods=['GET', 'POST'])
 @app.route('/float/<path:path>', methods=['GET', 'POST'])
 def proxy(path=''):
+    if path == 'start' and request.method == 'POST':
+        _record_mission_start()
+        print(f"[proxy] mission start command sent at {_now()}", flush=True)
     url = f"{FLOAT_BASE}/{path}"
     try:
         r = req.request(
@@ -290,12 +389,12 @@ def proxy(path=''):
 
 @app.route('/receive', methods=['POST'])
 def receive():
-    """Float pushes CSV here after recovery."""
     if 'file' in request.files:
         data = request.files['file'].read().decode()
     else:
         data = request.get_data(as_text=True)
     packets, hsh, is_new = _save_data(data)
+    _record_receive(is_new, packets, hsh)
     if is_new:
         print(f"[receive] NEW data from {request.remote_addr} — "
               f"{packets} packets  id={hsh}", flush=True)
@@ -309,12 +408,12 @@ def receive():
 
 @app.route('/fetch', methods=['POST'])
 def fetch():
-    """Controller pulls CSV from float on demand."""
     try:
         r = req.get(f"{FLOAT_BASE}/data", timeout=10)
         if r.status_code != 200:
             return jsonify({'error': 'Float returned no data'}), 502
         packets, hsh, is_new = _save_data(r.text)
+        _record_receive(is_new, packets, hsh)
         if is_new:
             print(f"[fetch] NEW data pulled from float — "
                   f"{packets} packets  id={hsh}", flush=True)
@@ -328,6 +427,34 @@ def fetch():
 
 
 # ── data serve ────────────────────────────────────────────────────────────────
+
+@app.route('/events')
+def events():
+    ev = _load_events()
+    # Compute a human-readable lag note if we have both timestamps
+    if ev.get('mission_started_at') and ev.get('first_data_at'):
+        try:
+            fmt   = '%H:%M:%S'
+            start = datetime.strptime(ev['mission_started_at'], fmt)
+            first = datetime.strptime(ev['first_data_at'], fmt)
+            secs  = int((first - start).total_seconds())
+            m, s  = divmod(abs(secs), 60)
+            ev['lag_note'] = f"{m}m {s}s after mission start"
+        except Exception:
+            ev['lag_note'] = ''
+    return jsonify(ev)
+
+
+@app.route('/rawdata')
+def rawdata():
+    if not os.path.exists(DATA_PATH):
+        return jsonify([])
+    rows = []
+    with open(DATA_PATH) as f:
+        for row in csv.DictReader(f):
+            rows.append(row)
+    return jsonify(rows)
+
 
 @app.route('/data')
 def get_data():
