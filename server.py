@@ -57,6 +57,22 @@ def _packet_count():
         return max(0, sum(1 for _ in f) - 1)  # minus header row
 
 
+def _nav(active=''):
+    pages = [('/', 'Home'), ('/tuning', 'Tuning'), ('/runs', 'Runs'), ('/log', 'Log')]
+    items = ''.join(
+        '<a href="{}" style="text-decoration:none;margin-right:1.4rem;font-size:.88rem;'
+        'color:{};{}">{}</a>'.format(
+            href,
+            '#fff' if href == active else '#99b',
+            'font-weight:700;border-bottom:2px solid #4db8ff;padding-bottom:2px'
+            if href == active else '',
+            label
+        ) for href, label in pages
+    )
+    return ('<nav style="background:#1a1a2e;padding:.55rem 1.5rem;'
+            'margin:-1rem -1.5rem 1.2rem">' + items + '</nav>')
+
+
 # ── UI ───────────────────────────────────────────────────────────────────────
 
 @app.route('/')
@@ -96,7 +112,8 @@ def index():
 </style>
 </head>
 <body>
-<h1>&#x1F4E1; {CALL_SIGN} Float Control &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a> &nbsp;<a href="/runs" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4C1; Runs</a> &nbsp;<a href="/log" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4CB; Log</a></h1>
+{_nav('/')}
+<h1 style="margin-top:0">&#x1F4E1; {CALL_SIGN} Float</h1>
 
 <div class="grid">
   <div class="card">
@@ -395,8 +412,7 @@ def list_runs():
 h1{{font-size:1.2rem}}a{{color:#0077b6}}
 table{{border-collapse:collapse;width:100%}}th,td{{padding:.4rem .8rem;border-bottom:1px solid #eee;text-align:left}}
 th{{background:#f0f2f5;font-size:.82rem;text-transform:uppercase}}</style></head>
-<body><h1>&#x1F4C1; {CALL_SIGN} Run History</h1>
-<p><a href="/">← Main UI</a> &nbsp; <a href="/log">View log</a></p>
+<body>{_nav('/runs')}<h1 style="margin-top:0">&#x1F4C1; {CALL_SIGN} Run History</h1>
 <table><thead><tr><th>Run</th><th>CSV</th><th>Plot</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
     return Response(html, mimetype='text/html')
@@ -495,8 +511,8 @@ def tuning_page():
 </style>
 </head>
 <body>
-<h1>&#x1F9EA; {CALL_SIGN} — Test &amp; Tuning</h1>
-<a class="back" href="/">← Back to main UI</a>
+{_nav('/tuning')}
+<h1 style="margin-top:0">&#x1F9EA; {CALL_SIGN} — Test &amp; Tuning</h1>
 
 <div class="card">
   <h2>Tunable Parameters</h2>

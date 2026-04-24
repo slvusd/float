@@ -125,6 +125,23 @@ def _make_plot():
     return buf
 
 
+def _nav(active=''):
+    pages = [('/', 'Home'), ('/tuning', 'Tuning'), ('/comp', 'Competition'),
+             ('/float/runs', 'Float Runs'), ('/float/log', 'Float Log')]
+    items = ''.join(
+        '<a href="{}" style="text-decoration:none;margin-right:1.4rem;font-size:.88rem;'
+        'color:{};{}">{}</a>'.format(
+            href,
+            '#fff' if href == active else '#99b',
+            'font-weight:700;border-bottom:2px solid #4db8ff;padding-bottom:2px'
+            if href == active else '',
+            label
+        ) for href, label in pages
+    )
+    return ('<nav style="background:#1a1a2e;padding:.55rem 1.5rem;'
+            'margin:-1rem -1.5rem 1.2rem">' + items + '</nav>')
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 @app.route('/')
@@ -175,7 +192,8 @@ def index():
 </style>
 </head>
 <body>
-<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.85rem;color:#888">port {CONTROLLER_PORT}</small> &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a> &nbsp;<a href="/float/runs" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4C1; Runs</a> &nbsp;<a href="/float/log" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4CB; Log</a></h1>
+{_nav('/')}
+<h1 style="margin-top:0">&#x1F9FF; {CALL_SIGN} Controller</h1>
 
 <div class="grid2">
   <div class="card">
@@ -424,8 +442,8 @@ def tuning_page():
 </style>
 </head>
 <body>
-<h1>&#x1F9EA; {CALL_SIGN} — Test &amp; Tuning</h1>
-<a class="back" href="/">← Back to controller UI</a>
+{_nav('/tuning')}
+<h1 style="margin-top:0">&#x1F9EA; {CALL_SIGN} — Test &amp; Tuning</h1>
 
 {'<p style="color:#c0392b;font-size:.85rem">⚠ Float unreachable — showing default values. Parameters will be applied when run starts.</p>' if not float_ok else '<p style="color:#155724;font-size:.85rem">✓ Loaded current config from float.</p>'}
 
@@ -646,6 +664,92 @@ updateTargets();
 _polling = setInterval(pollAll, 4000);
 pollAll();
 </script>
+</body>
+</html>"""
+    return Response(html, mimetype='text/html')
+
+
+# ── competition page ─────────────────────────────────────────────────────────
+
+@app.route('/comp')
+def comp():
+    """Clean results page for the judges — no infrastructure details."""
+    packets = []
+    if os.path.exists(DATA_PATH):
+        with open(DATA_PATH) as f:
+            packets = list(csv.DictReader(f))
+
+    n        = len(packets)
+    has_plot = n >= 2
+
+    rows = ''.join(
+        f'<tr><td>{i+1}</td><td>{p["elapsed_s"]} s</td>'
+        f'<td>{float(p["depth_m"]):.2f} m</td>'
+        f'<td>{float(p["pressure_kpa"]):.1f} kPa</td>'
+        f'<td>{p["packet"]}</td></tr>'
+        for i, p in enumerate(packets)
+    ) or '<tr><td colspan="5">No data yet.</td></tr>'
+
+    plot_section = (
+        f'<img src="/plot?t={int(__import__("time").time())}" alt="Depth profile" '
+        f'style="max-width:100%;border:1px solid #ccc;border-radius:4px">'
+        if has_plot else
+        '<p style="color:#888">Run a mission to generate the plot.</p>'
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Team {CALL_SIGN} — Float Results</title>
+<style>
+  body      {{ font-family: Arial, sans-serif; max-width: 960px; margin: 20px auto;
+               padding: 0 20px; color: #222; }}
+  h1        {{ color: #003366; border-bottom: 3px solid #003366; padding-bottom: 8px; }}
+  h2        {{ color: #0055aa; margin-top: 1.8rem; }}
+  .mission  {{ background: #f0f4ff; border-left: 4px solid #003366;
+               padding: 12px 16px; margin: 16px 0; border-radius: 0 4px 4px 0; }}
+  .mission li {{ margin: 4px 0; }}
+  table     {{ border-collapse: collapse; width: 100%; font-size: 13px; margin-top: .5rem; }}
+  th        {{ background: #003366; color: white; padding: 8px 12px; text-align: left; }}
+  td        {{ padding: 5px 12px; border-bottom: 1px solid #ddd; font-family: monospace; }}
+  tr:nth-child(even) {{ background: #f8f8f8; }}
+  .btn      {{ display: inline-block; background: #003366; color: white;
+               padding: 10px 22px; text-decoration: none; border-radius: 4px;
+               margin: 8px 4px 8px 0; font-size: 14px; }}
+  .tools    {{ font-size: 12px; color: #888; margin-top: 2rem;
+               border-top: 1px solid #eee; padding-top: .8rem; }}
+</style>
+</head>
+<body>
+<h1>Team {CALL_SIGN} — Autonomous Float</h1>
+<p style="color:#555;margin-top:-.5rem">MATE ROV Competition</p>
+
+<div class="mission">
+  <strong>What our float did:</strong>
+  <ul>
+    <li>Descended to 2.5 m and held depth for 30 seconds, logging data every 5 seconds</li>
+    <li>Ascended to 0.4 m and held depth for 30 seconds, logging data every 5 seconds</li>
+    <li>Repeated both profiles a second time</li>
+    <li>Waited passively for ROV recovery — did not surface on its own</li>
+    <li>Transmitted all data to our shore station after recovery</li>
+  </ul>
+</div>
+
+<h2>Depth Profile</h2>
+{plot_section}
+
+<h2>Data Log &nbsp;<span style="font-weight:400;font-size:.9rem;color:#555">({n} packets)</span></h2>
+<a class="btn" href="/data" download>&#x2B73; Download CSV</a>
+<table>
+  <thead>
+    <tr><th>#</th><th>Elapsed</th><th>Depth</th><th>Pressure</th><th>Data Packet</th></tr>
+  </thead>
+  <tbody>{rows}</tbody>
+</table>
+
+<p class="tools"><a href="/">Team tools &#x2192;</a></p>
 </body>
 </html>"""
     return Response(html, mimetype='text/html')
