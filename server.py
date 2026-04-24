@@ -322,7 +322,7 @@ def get_plot():
     plt.tight_layout()
 
     buf = io.BytesIO()
-    fig.savefig(buf, format='jpeg', dpi=150, quality=90)
+    fig.savefig(buf, format='jpeg', dpi=150)
     plt.close(fig)
     buf.seek(0)
     return send_file(buf, mimetype='image/jpeg')
