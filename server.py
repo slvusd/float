@@ -224,26 +224,39 @@ setInterval(refreshPlot, 30000);
     return Response(html, mimetype='text/html')
 
 
+# ── actuator GPIO management ──────────────────────────────────────────────────
+# GPIO is held between requests (efficient) but released cleanly before the
+# mission subprocess starts so depthadjust.py can claim the pins without conflict.
+
+_gpio_ready = False
+
+
+def _ensure_gpio():
+    global _gpio_ready
+    if not _gpio_ready:
+        GPIO.setwarnings(False)
+        actuator.setupActuator()
+        _gpio_ready = True
+
+
+def _release_gpio():
+    global _gpio_ready
+    if _gpio_ready:
+        actuator.cleanupActuator()
+        _gpio_ready = False
+
+
 # ── actuator endpoints ────────────────────────────────────────────────────────
-# GPIO is set up per-request and released after, so the mission subprocess
-# can always claim the pins without conflict.
-
-def _actuator_op(fn, duration=None):
-    GPIO.setwarnings(False)
-    actuator.setupActuator()
-    fn()
-    if duration:
-        time.sleep(duration)
-    actuator.stopActuator()
-    actuator.cleanupActuator()
-
 
 @app.route('/extend', methods=['POST'])
 def extend():
     if _mission_running():
         return jsonify({'error': 'Mission in progress'}), 409
     duration = float(request.args.get('duration', 20))
-    _actuator_op(actuator.extendActuator, duration)
+    _ensure_gpio()
+    actuator.extendActuator()
+    time.sleep(duration)
+    actuator.stopActuator()
     return jsonify({'status': 'done', 'duration': duration})
 
 
@@ -252,16 +265,17 @@ def retract():
     if _mission_running():
         return jsonify({'error': 'Mission in progress'}), 409
     duration = float(request.args.get('duration', 20))
-    _actuator_op(actuator.retractActuator, duration)
+    _ensure_gpio()
+    actuator.retractActuator()
+    time.sleep(duration)
+    actuator.stopActuator()
     return jsonify({'status': 'done', 'duration': duration})
 
 
 @app.route('/stop', methods=['POST'])
 def stop():
-    try:
-        _actuator_op(lambda: None)  # setup → stop → cleanup
-    except Exception:
-        pass
+    if _gpio_ready:
+        actuator.stopActuator()
     return jsonify({'status': 'stopped'})
 
 
@@ -338,6 +352,7 @@ def start_mission():
     if a.get('sim', '').lower() in ('1', 'true', 'yes'):
                                     cmd.append('--sim')
     if 'sim_rate'        in a:      cmd += ['--sim-rate',        a['sim_rate']]
+    _release_gpio()   # let depthadjust.py claim the pins cleanly
     _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
     return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
                     'test_mode': test, 'cmd': cmd[2:]})
@@ -345,8 +360,11 @@ def start_mission():
 
 @app.route('/status')
 def status():
+    running = _mission_running()
+    if not running:
+        _ensure_gpio()   # re-acquire pins after mission subprocess exits
     return jsonify({
-        'mission_running': _mission_running(),
+        'mission_running': running,
         'bias_m':          _load_bias(),
         'packets_logged':  _packet_count()
     })
