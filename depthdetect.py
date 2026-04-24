@@ -1,12 +1,16 @@
 import ms5837
 import time
+from config import SENSOR_MODEL, SENSOR_I2C_BUS
 
 sensor = None
 
 def initSensor():
     global sensor
-    sensor = ms5837.MS5837_02BA()
-    if (sensor == None):
+    if SENSOR_MODEL == "02BA":
+        sensor = ms5837.MS5837_02BA(SENSOR_I2C_BUS)
+    else:
+        sensor = ms5837.MS5837_30BA(SENSOR_I2C_BUS)
+    if sensor is None:
         print("Failed to create sensor")
         return False
 

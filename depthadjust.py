@@ -2,20 +2,9 @@ import time
 from datetime import datetime
 import actuator
 import depthdetect as depth
-
-CALL_SIGN = "PLACEHOLDER01"
-
-TARGET_BOTTOM_M     = 2.50
-TARGET_SURFACE_M    = 0.40
-TOLERANCE_M         = 0.33   # ±33 cm valid window
-
-HOLD_SECONDS        = 30
-PACKET_INTERVAL_S   = 5
-PACKETS_REQUIRED    = 7
-NUM_PROFILES        = 2
-
-CONTROL_DEADBAND_M  = 0.03   # stop actuator when within this of target
-CALIBRATION_SAMPLES = 10
+from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
+                    HOLD_SECONDS, PACKET_INTERVAL_S, PACKETS_REQUIRED,
+                    NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES)
 
 _depth_bias_m = 0.0
 _all_packets  = []
