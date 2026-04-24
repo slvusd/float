@@ -324,6 +324,9 @@ def start_mission():
     if 'target_bottom'   in a:      cmd += ['--target-bottom',   a['target_bottom']]
     if 'target_surface'  in a:      cmd += ['--target-surface',  a['target_surface']]
     if 'sensor_offset'   in a:      cmd += ['--sensor-offset',   a['sensor_offset']]
+    if a.get('sim', '').lower() in ('1', 'true', 'yes'):
+                                    cmd.append('--sim')
+    if 'sim_rate'        in a:      cmd += ['--sim-rate',        a['sim_rate']]
     _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
     return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
                     'test_mode': test, 'cmd': cmd[2:]})
@@ -473,6 +476,7 @@ def get_config():
         'target_surface_m':   TARGET_SURFACE_M,
         'tolerance_m':        TOLERANCE_M,
         'sensor_offset_m':    SENSOR_DEPTH_OFFSET_M,
+        'sim_rate':           0.08,
     })
 
 
@@ -600,10 +604,29 @@ def tuning_page():
 </div>
 
 <div class="card">
-  <h2>Run</h2>
+  <h2>Simulation (dry run)</h2>
+  <div class="desc" style="margin-bottom:.5rem">
+    Simulates depth sensor — actuator still moves so the syringe runs dry.
+    Use this to verify the UI, data logging, and control logic without water.
+  </div>
+  <div class="param">
+    <label>Sim descent/ascent rate (m/s)</label>
+    <div class="desc">At 0.08 m/s, reaching 2.5 m takes ~30 s. Raise to finish faster.</div>
+    <div class="row">
+      <input type="range" id="sim-rate" min="0.02" max="0.5" step="0.02" value="0.08"
+             oninput="document.getElementById('sr-val').textContent=parseFloat(this.value).toFixed(2)+' m/s'">
+      <span class="val" id="sr-val">0.08 m/s</span>
+    </div>
+  </div>
+  <button class="btn-neutral" style="background:#5a3e85"
+          onclick="startSim()">&#x1F52C; Sim Run (dry)</button>
+</div>
+
+<div class="card">
+  <h2>Real Run</h2>
   <div id="msg"></div>
   <div style="margin-bottom:.5rem">Mission: <span id="mission-badge" class="pill idle">idle</span> &nbsp; Packets: <span id="packets">—</span></div>
-  <button class="btn-test" onclick="startTest()">&#x1F9EA; Start Test Run</button>
+  <button class="btn-test" onclick="startTest()">&#x1F9EA; Test Run (surfaces)</button>
   <button class="btn-stop" onclick="stopRun()">&#x23F9; Stop</button>
   <button class="btn-neutral" onclick="location.href='/plot'" style="float:right">&#x1F4C8; View plot</button>
 </div>
@@ -633,7 +656,7 @@ function updateTargets() {{
   document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
 }}
 
-function buildUrl() {{
+function buildUrl(extra='') {{
   const duty    = document.getElementById('duty').value;
   const db      = document.getElementById('deadband').value;
   const delay   = document.getElementById('surface-delay').value;
@@ -641,7 +664,20 @@ function buildUrl() {{
   const tb      = document.getElementById('target-bottom').value;
   const ts      = document.getElementById('target-surface').value;
   const off     = document.getElementById('sensor-offset').value;
-  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}`;
+  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}${{extra}}`;
+}}
+
+function startSim() {{
+  const rate = document.getElementById('sim-rate').value;
+  msg('Starting sim run…');
+  fetch(buildUrl(`&sim=true&sim_rate=${{rate}}`), {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ msg(d.error, true); return; }}
+      msg('Sim running at ' + rate + ' m/s — watch the depth change');
+      startPolling();
+    }})
+    .catch(e => msg(e.toString(), true));
 }}
 
 updateTargets();

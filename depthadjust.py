@@ -21,6 +21,8 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
 
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument('--test',            action='store_true')
+_parser.add_argument('--sim',             action='store_true')
+_parser.add_argument('--sim-rate',        type=float, default=None, dest='sim_rate')
 _parser.add_argument('--duty',            type=float, default=None)
 _parser.add_argument('--deadband',        type=float, default=None)
 _parser.add_argument('--surface-delay',   type=float, default=None, dest='surface_delay')
@@ -31,7 +33,9 @@ _parser.add_argument('--sensor-offset',   type=float, default=None, dest='sensor
 _args, _ = _parser.parse_known_args()
 
 # Runtime values — CLI args override config, config is the fallback
-_test_mode      = _args.test or TEST_MODE
+_sim_mode       = _args.sim
+_sim_rate       = _args.sim_rate if _args.sim_rate is not None else 0.08  # m/s
+_test_mode      = _args.test or _args.sim or TEST_MODE  # sim implies test (surfaces at end)
 _deadband_m     = _args.deadband        if _args.deadband        is not None else CONTROL_DEADBAND_M
 _surface_delay  = _args.surface_delay   if _args.surface_delay   is not None else TEST_SURFACE_DELAY_S
 _surface_extend = _args.surface_extend  if _args.surface_extend  is not None else TEST_SURFACE_EXTEND_S
@@ -46,6 +50,65 @@ BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
 DATA_PATH = os.path.join(BASE_DIR, DATA_FILE)
 RUNS_DIR  = os.path.join(BASE_DIR, 'runs')
 LOG_PATH  = os.path.join(BASE_DIR, 'float.log')
+
+# ── simulation ───────────────────────────────────────────────────────────────
+# In sim mode the depth sensor is replaced with a virtual model driven by
+# actuator direction. The real actuator GPIO still fires so the dry syringe
+# moves and all hardware paths are exercised.
+
+if _sim_mode:
+    import random
+
+    class _SimSensor:
+        """Virtual depth sensor. Direction: +1 sinking, -1 rising, 0 stopped."""
+        def __init__(self, rate):
+            self._depth = 0.0
+            self._dir   = 0
+            self._rate  = rate
+            self._t     = time.time()
+
+        def set_dir(self, d):
+            self._tick()   # flush elapsed time before changing direction
+            self._dir = d
+
+        def _tick(self):
+            now = time.time()
+            dt  = now - self._t
+            self._t = now
+            # Active movement + slight positive-buoyancy drift when stopped
+            drift = -0.001 if self._dir == 0 else 0
+            self._depth += (self._dir * self._rate + drift) * dt
+            self._depth += random.gauss(0, 0.004)    # sensor noise
+            self._depth  = max(-0.15, min(6.0, self._depth))
+
+        def read(self):
+            self._tick()
+            pressure = 101.3 + max(0.0, self._depth) * 9.794  # kPa freshwater
+            return self._depth, pressure
+
+    _sim_sensor = _SimSensor(_sim_rate)
+
+    # Wrap actuator calls so the sim sensor tracks direction while GPIO still fires
+    _real_retract = actuator.retractActuator
+    _real_extend  = actuator.extendActuator
+    _real_stop    = actuator.stopActuator
+
+    def _sim_retract():
+        _real_retract()
+        _sim_sensor.set_dir(1)   # retract → sinking
+
+    def _sim_extend():
+        _real_extend()
+        _sim_sensor.set_dir(-1)  # extend  → rising
+
+    def _sim_stop():
+        _real_stop()
+        _sim_sensor.set_dir(0)
+
+    actuator.retractActuator = _sim_retract
+    actuator.extendActuator  = _sim_extend
+    actuator.stopActuator    = _sim_stop
+
 
 # ── logging ───────────────────────────────────────────────────────────────────
 
@@ -92,6 +155,9 @@ def calibrateBias():
 
 def readTrueDepthAndPressure():
     """Read sensor with one retry. Returns (depth_m, pressure_kpa) or (None, None)."""
+    if _sim_mode:
+        d, p = _sim_sensor.read()
+        return d, p   # bias is 0 in sim; depth is already in absolute metres
     depth_m, pressure_kpa = depth.readSensor()
     if depth_m is None:
         log.warning("Sensor read returned None — retrying once")
@@ -274,12 +340,15 @@ def main():
     log.info(f"  targets: bottom {_target_bottom:.2f} m  surface {_target_surface:.2f} m")
     log.info("=" * 60)
 
-    if not depth.initSensor():
-        log.error("Sensor init failed — aborting mission")
-        return
-
-    if not loadBias():
-        calibrateBias()
+    if _sim_mode:
+        log.info(f"SIM MODE — depth sensor mocked at {_sim_rate} m/s")
+        log.info("Real actuator GPIO still fires — dry syringe will move")
+    else:
+        if not depth.initSensor():
+            log.error("Sensor init failed — aborting mission")
+            return
+        if not loadBias():
+            calibrateBias()
 
     archivePreviousRun()
 

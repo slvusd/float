@@ -530,6 +530,24 @@ def tuning_page():
   </div>
 
   <div class="card">
+    <h2>Simulation (dry run)</h2>
+    <div class="desc" style="margin-bottom:.5rem">
+      Mocks the depth sensor — actuator GPIO still fires so the syringe moves dry.
+      Verify UI, logging, and control logic without a pool.
+    </div>
+    <div class="param">
+      <label>Sim rate (m/s)</label>
+      <div class="row">
+        <input type="range" id="sim-rate" min="0.02" max="0.5" step="0.02" value="0.08"
+               oninput="document.getElementById('sr-val').textContent=parseFloat(this.value).toFixed(2)+' m/s'">
+        <span class="val" id="sr-val">0.08 m/s</span>
+      </div>
+    </div>
+    <button style="background:#5a3e85;color:#fff;border:none;border-radius:6px;padding:.5rem 1rem;font-size:.9rem;font-weight:700;cursor:pointer"
+            onclick="startSim()">&#x1F52C; Sim Run (dry)</button>
+  </div>
+
+  <div class="card">
     <h2>Run</h2>
     <div id="msg"></div>
     <div class="status-row">Float <span id="float-conn" class="pill {'ok' if float_ok else 'err'}">&nbsp;</span></div>
@@ -581,7 +599,7 @@ function updateTargets() {{
   document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
 }}
 
-function buildCmd() {{
+function buildCmd(extra='') {{
   const duty   = document.getElementById('duty').value;
   const db     = document.getElementById('deadband').value;
   const delay  = document.getElementById('surface-delay').value;
@@ -589,7 +607,20 @@ function buildCmd() {{
   const tb     = document.getElementById('target-bottom').value;
   const ts     = document.getElementById('target-surface').value;
   const off    = document.getElementById('sensor-offset').value;
-  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}`;
+  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}${{extra}}`;
+}}
+
+function startSim() {{
+  const rate = document.getElementById('sim-rate').value;
+  msg('Starting sim run…');
+  fetch(buildCmd(`&sim=true&sim_rate=${{rate}}`), {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ msg(d.error, true); return; }}
+      msg('Sim running at ' + rate + ' m/s — watch depth on the right');
+      if (!_polling) _polling = setInterval(pollAll, 3000);
+    }})
+    .catch(e => msg(e.toString(), true));
 }}
 
 function startTest() {{
