@@ -30,6 +30,21 @@ PACKETS_REQUIRED    = 7
 NUM_PROFILES        = 2
 CALIBRATION_SAMPLES = 10
 
+# ── Tuning ────────────────────────────────────────────────────────────────────
+# Reduce ACTUATOR_DUTY_CYCLE to slow the piston and reduce overshoot.
+# Reduce CONTROL_DEADBAND_M to chase the target more aggressively (may oscillate).
+# Widen CONTROL_DEADBAND_M if the float hunts (constantly extends/retracts).
+ACTUATOR_DUTY_CYCLE  = 80    # H-bridge PWM duty % (100 = full speed, ~80 recommended)
+# CONTROL_DEADBAND_M is already defined above in Mission parameters
+
+# ── Test mode ─────────────────────────────────────────────────────────────────
+# Set TEST_MODE = True for pool tests without the ROV.
+# After both profiles complete, the float waits TEST_SURFACE_DELAY_S seconds
+# then extends the piston fully so it floats to the surface for manual retrieval.
+TEST_MODE            = False
+TEST_SURFACE_DELAY_S = 60    # seconds to wait after profiles before surfacing
+TEST_SURFACE_EXTEND_S = 30   # seconds to run the extend motor when surfacing
+
 # Actuator test — seconds to run each direction
 ACTUATOR_TEST_DURATION_S = 8
 

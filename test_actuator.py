@@ -6,22 +6,21 @@ Runs the actuator fully in each direction so it exercises full travel
 regardless of starting position, then leaves it stopped.
 
 Usage:
-    python test_actuator.py                  # full speed
-    python test_actuator.py --duty 50        # 50% PWM speed
+    python test_actuator.py                  # uses ACTUATOR_DUTY_CYCLE from config.py
+    python test_actuator.py --duty 50        # override duty cycle for this run
     python test_actuator.py --duration 10    # run each direction 10s
 """
 import argparse
-import gc
 import time
 import RPi.GPIO as GPIO
 import actuator
-from config import ACTUATOR_TEST_DURATION_S, ACTUATOR_PIN_ENABLE_BCM
+from config import ACTUATOR_TEST_DURATION_S, ACTUATOR_DUTY_CYCLE
 
 parser = argparse.ArgumentParser(description="Test linear actuator in both directions.")
 parser.add_argument("--duration", type=float, default=ACTUATOR_TEST_DURATION_S,
                     help=f"Seconds to run each direction (default: {ACTUATOR_TEST_DURATION_S})")
-parser.add_argument("--duty", type=float, default=100,
-                    help="PWM duty cycle 0-100 on enable pin (default: 100 = full speed)")
+parser.add_argument("--duty", type=float, default=ACTUATOR_DUTY_CYCLE,
+                    help=f"PWM duty cycle 0-100 (default: {ACTUATOR_DUTY_CYCLE} from config)")
 args = parser.parse_args()
 
 if not 0 < args.duty <= 100:
@@ -30,10 +29,7 @@ if not 0 < args.duty <= 100:
 
 GPIO.setwarnings(False)
 actuator.setupActuator()
-
-# Replace the static HIGH on the enable pin with PWM
-pwm = GPIO.PWM(ACTUATOR_PIN_ENABLE_BCM, 1000)  # 1 kHz
-pwm.start(args.duty)
+actuator.setDutyCycle(args.duty)
 
 try:
     print(f"Extending for {args.duration}s at {args.duty:.0f}% duty...")
@@ -56,8 +52,5 @@ except KeyboardInterrupt:
     actuator.stopActuator()
 
 finally:
-    pwm.stop()
-    del pwm
-    gc.collect()   # force PWM.__del__ now, while chip handle is still valid
-    GPIO.cleanup()
+    actuator.cleanupActuator()
     print("Done.")

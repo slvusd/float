@@ -18,5 +18,5 @@ actuator.extendActuator()
 time.sleep(10)
 actuator.stopActuator()
 
-GPIO.cleanup()
+actuator.cleanupActuator()
 print("Done — piston should be fully extended (maximum buoyancy).")

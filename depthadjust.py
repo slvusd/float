@@ -8,7 +8,8 @@ import depthdetect as depth
 from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     HOLD_SECONDS, PACKET_INTERVAL_S, PACKETS_REQUIRED,
                     NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES,
-                    BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT)
+                    BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
+                    TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
@@ -195,8 +196,19 @@ def main():
     for i in range(NUM_PROFILES):
         all_packets.extend(executeProfile(i + 1, mission_start))
 
-    print("\nProfiles complete. Actuator stopped. Waiting for ROV recovery...")
+    print("\nProfiles complete. Actuator stopped.")
     actuator.stopActuator()
+
+    if TEST_MODE:
+        print(f"\nTEST MODE: waiting {TEST_SURFACE_DELAY_S}s then surfacing for manual retrieval...")
+        time.sleep(TEST_SURFACE_DELAY_S)
+        print(f"Surfacing — extending for {TEST_SURFACE_EXTEND_S}s...")
+        actuator.extendActuator()
+        time.sleep(TEST_SURFACE_EXTEND_S)
+        actuator.stopActuator()
+        print("Surfaced. Waiting for retrieval.")
+    else:
+        print("Waiting for ROV recovery...")
 
     # Immediately begin transmission loop — will keep retrying until the float
     # is above water and WiFi connects, then continues as a 30s heartbeat.
