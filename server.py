@@ -21,13 +21,14 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     ACTUATOR_DUTY_CYCLE, CONTROL_DEADBAND_M,
                     TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
-                    SENSOR_DEPTH_OFFSET_M)
+                    SENSOR_DEPTH_OFFSET_M, APPROACH_ZONE_M, MIN_DUTY_PCT)
 
 app = Flask(__name__)
 
-BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
-BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
-DATA_PATH = os.path.join(BASE_DIR, DATA_FILE)
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+BIAS_PATH    = os.path.join(BASE_DIR, BIAS_FILE)
+DATA_PATH    = os.path.join(BASE_DIR, DATA_FILE)
+STATUS_PATH  = os.path.join(BASE_DIR, 'mission_status.json')
 
 _mission_proc = None
 
@@ -48,6 +49,16 @@ def _save_bias(value):
 
 def _mission_running():
     return _mission_proc is not None and _mission_proc.poll() is None
+
+
+def _mission_stage():
+    if os.path.exists(STATUS_PATH):
+        try:
+            with open(STATUS_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {'stage': 'idle', 'time': ''}
 
 
 def _packet_count():
@@ -121,6 +132,7 @@ def index():
     <div class="status-row"><span>Network</span><span id="net-badge" class="pill idle">checking…</span>&nbsp;<span id="net-ip" style="font-size:.8rem;color:#888"></span></div>
     <div class="status-row"><span>Controller</span><span id="ctrl-badge" class="pill idle">checking…</span></div>
     <div class="status-row"><span>Mission</span><span id="mission-badge" class="pill idle">idle</span></div>
+    <div class="status-row"><span>Stage</span><span id="stage-val" style="font-size:.82rem;color:#555">—</span></div>
     <div class="status-row"><span>Bias</span><span id="bias-val">—</span></div>
     <div class="status-row"><span>Packets logged</span><span id="packets-val">—</span></div>
     <div class="status-row"><span>Depth</span><span id="depth-val">—</span></div>
@@ -141,6 +153,7 @@ def index():
     <button class="btn-neutral" onclick="api('POST','/retract?duration='+document.getElementById('ret-dur').value)">&#x2191; Retract</button>
     <br>
     <button class="btn-danger" onclick="api('POST','/stop')">&#x23F9; Stop actuator</button>
+    <button class="btn-danger" onclick="api('POST','/abort')" style="background:#7b0000">&#x1F6D1; Abort mission</button>
     <br><br>
     <a class="dl" href="/data" download>&#x2B73; Download CSV</a>
   </div>
@@ -173,8 +186,12 @@ function api(method, url) {{
 function refreshStatus() {{
   fetch('/status').then(r=>r.json()).then(d=>{{
     const badge = document.getElementById('mission-badge');
-    badge.textContent = d.mission_running ? 'running' : 'idle';
-    badge.className = 'pill ' + (d.mission_running ? 'running' : 'idle');
+    const label = d.profiles_complete ? 'transmitting' : (d.mission_running ? 'running' : 'idle');
+    const cls   = d.profiles_complete ? 'warn' : (d.mission_running ? 'running' : 'idle');
+    badge.textContent = label;
+    badge.className   = 'pill ' + cls;
+    document.getElementById('stage-val').textContent =
+      d.stage ? (d.stage.replace(/_/g,' ') + (d.stage_time ? '  ' + d.stage_time : '')) : '—';
     document.getElementById('bias-val').textContent = d.bias_m.toFixed(4) + ' m';
     document.getElementById('packets-val').textContent = d.packets_logged;
   }});
@@ -352,6 +369,8 @@ def start_mission():
     if a.get('sim', '').lower() in ('1', 'true', 'yes'):
                                     cmd.append('--sim')
     if 'sim_rate'        in a:      cmd += ['--sim-rate',        a['sim_rate']]
+    if 'approach_zone'   in a:      cmd += ['--approach-zone',   a['approach_zone']]
+    if 'min_duty'        in a:      cmd += ['--min-duty',        a['min_duty']]
     _release_gpio()   # let depthadjust.py claim the pins cleanly
     _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
     return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
@@ -362,12 +381,31 @@ def start_mission():
 def status():
     running = _mission_running()
     if not running:
-        _ensure_gpio()   # re-acquire pins after mission subprocess exits
+        _ensure_gpio()
+    stage = _mission_stage()
     return jsonify({
-        'mission_running': running,
-        'bias_m':          _load_bias(),
-        'packets_logged':  _packet_count()
+        'mission_running':    running,
+        'stage':              stage.get('stage', 'idle'),
+        'stage_time':         stage.get('time', ''),
+        'profiles_complete':  stage.get('stage') in ('profiles_complete',
+                                                      'surfacing', 'transmitting', 'done'),
+        'bias_m':             _load_bias(),
+        'packets_logged':     _packet_count()
     })
+
+
+@app.route('/abort', methods=['POST'])
+def abort():
+    global _mission_proc
+    if _mission_proc and _mission_proc.poll() is None:
+        _mission_proc.terminate()
+        try:
+            _mission_proc.wait(timeout=5)
+        except Exception:
+            _mission_proc.kill()
+    _ensure_gpio()
+    actuator.stopActuator()
+    return jsonify({'status': 'aborted'})
 
 
 # ── data endpoints ────────────────────────────────────────────────────────────
@@ -505,6 +543,8 @@ def get_config():
         'target_surface_m':   TARGET_SURFACE_M,
         'tolerance_m':        TOLERANCE_M,
         'sensor_offset_m':    SENSOR_DEPTH_OFFSET_M,
+        'approach_zone_m':    APPROACH_ZONE_M,
+        'min_duty_pct':       MIN_DUTY_PCT,
         'sim_rate':           0.08,
     })
 
@@ -540,6 +580,7 @@ def tuning_page():
   .pill{{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.78rem;font-weight:700}}
   .running{{background:#cce5ff;color:#004085}}
   .idle{{background:#e2e3e5;color:#383d41}}
+  .warn{{background:#fff3cd;color:#856404}}
   #plot-img{{max-width:100%;border-radius:6px;margin-top:.5rem}}
 </style>
 </head>
@@ -567,6 +608,26 @@ def tuning_page():
       <input type="range" id="deadband" min="0.01" max="0.15" step="0.01" value="{CONTROL_DEADBAND_M}"
              oninput="document.getElementById('db-val').textContent=parseFloat(this.value).toFixed(2)+' m'">
       <span class="val" id="db-val">{CONTROL_DEADBAND_M} m</span>
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Approach Zone (m)</label>
+    <div class="desc">Start slowing when this far from target. Duty ramps from max down to min. Default: {APPROACH_ZONE_M} m</div>
+    <div class="row">
+      <input type="range" id="approach-zone" min="0.1" max="1.5" step="0.05" value="{APPROACH_ZONE_M}"
+             oninput="document.getElementById('az-val').textContent=parseFloat(this.value).toFixed(2)+' m'">
+      <span class="val" id="az-val">{APPROACH_ZONE_M:.2f} m</span>
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Min Duty % (near target)</label>
+    <div class="desc">Minimum speed when very close to target. Below 25% the motor may stall. Default: {MIN_DUTY_PCT}%</div>
+    <div class="row">
+      <input type="range" id="min-duty" min="15" max="60" step="5" value="{MIN_DUTY_PCT}"
+             oninput="document.getElementById('md-val').textContent=this.value+'%'">
+      <span class="val" id="md-val">{MIN_DUTY_PCT}%</span>
     </div>
   </div>
 
@@ -649,14 +710,17 @@ def tuning_page():
   </div>
   <button class="btn-neutral" style="background:#5a3e85"
           onclick="startSim()">&#x1F52C; Sim Run (dry)</button>
+  <button class="btn-stop" onclick="abortRun()">&#x1F6D1; Abort</button>
 </div>
 
 <div class="card">
   <h2>Real Run</h2>
   <div id="msg"></div>
-  <div style="margin-bottom:.5rem">Mission: <span id="mission-badge" class="pill idle">idle</span> &nbsp; Packets: <span id="packets">—</span></div>
+  <div style="margin-bottom:.3rem">Mission: <span id="mission-badge" class="pill idle">idle</span> &nbsp; Packets: <span id="packets">—</span></div>
+  <div style="font-size:.82rem;color:#555;margin-bottom:.5rem">Stage: <span id="stage-lbl">—</span></div>
   <button class="btn-test" onclick="startTest()">&#x1F9EA; Test Run (surfaces)</button>
-  <button class="btn-stop" onclick="stopRun()">&#x23F9; Stop</button>
+  <button class="btn-stop" onclick="stopRun()">&#x23F9; Stop actuator</button>
+  <button class="btn-stop" onclick="abortRun()" style="background:#7b0000">&#x1F6D1; Abort mission</button>
   <button class="btn-neutral" onclick="location.href='/plot'" style="float:right">&#x1F4C8; View plot</button>
 </div>
 
@@ -693,7 +757,9 @@ function buildUrl(extra='') {{
   const tb      = document.getElementById('target-bottom').value;
   const ts      = document.getElementById('target-surface').value;
   const off     = document.getElementById('sensor-offset').value;
-  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}${{extra}}`;
+  const az      = document.getElementById('approach-zone').value;
+  const md      = document.getElementById('min-duty').value;
+  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}${{extra}}`;
 }}
 
 function startSim() {{
@@ -727,6 +793,13 @@ function stopRun() {{
   fetch('/stop', {{method:'POST'}}).then(() => msg('Stopped.'));
 }}
 
+function abortRun() {{
+  fetch('/abort', {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => msg(d.status || 'aborted'))
+    .catch(e => msg(e.toString(), true));
+}}
+
 function startPolling() {{
   if (_polling) clearInterval(_polling);
   _polling = setInterval(pollStatus, 3000);
@@ -736,9 +809,13 @@ function startPolling() {{
 function pollStatus() {{
   fetch('/status').then(r=>r.json()).then(d=>{{
     const b = document.getElementById('mission-badge');
-    b.textContent = d.mission_running ? 'running' : 'idle';
-    b.className = 'pill ' + (d.mission_running ? 'running' : 'idle');
+    const label = d.profiles_complete ? 'transmitting' : (d.mission_running ? 'running' : 'idle');
+    const cls   = d.profiles_complete ? 'warn' : (d.mission_running ? 'running' : 'idle');
+    b.textContent = label;
+    b.className = 'pill ' + cls;
     document.getElementById('packets').textContent = d.packets_logged;
+    document.getElementById('stage-lbl').textContent =
+      d.stage ? d.stage.replace(/_/g,' ') + (d.stage_time ? '  ' + d.stage_time : '') : '—';
     if (!d.mission_running && _lastPackets !== d.packets_logged) {{
       _lastPackets = d.packets_logged;
       if (d.packets_logged >= 2) showPlot();

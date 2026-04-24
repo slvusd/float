@@ -15,7 +15,8 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
-                    SENSOR_DEPTH_OFFSET_M)
+                    SENSOR_DEPTH_OFFSET_M, ACTUATOR_DUTY_CYCLE,
+                    APPROACH_ZONE_M, MIN_DUTY_PCT)
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -30,26 +31,32 @@ _parser.add_argument('--surface-extend',  type=float, default=None, dest='surfac
 _parser.add_argument('--target-bottom',   type=float, default=None, dest='target_bottom')
 _parser.add_argument('--target-surface',  type=float, default=None, dest='target_surface')
 _parser.add_argument('--sensor-offset',   type=float, default=None, dest='sensor_offset')
+_parser.add_argument('--approach-zone',   type=float, default=None, dest='approach_zone')
+_parser.add_argument('--min-duty',        type=float, default=None, dest='min_duty')
 _args, _ = _parser.parse_known_args()
 
 # Runtime values — CLI args override config, config is the fallback
 _sim_mode       = _args.sim
-_sim_rate       = _args.sim_rate if _args.sim_rate is not None else 0.08  # m/s
-_test_mode      = _args.test or _args.sim or TEST_MODE  # sim implies test (surfaces at end)
+_sim_rate       = _args.sim_rate if _args.sim_rate is not None else 0.08
+_test_mode      = _args.test or _args.sim or TEST_MODE
 _deadband_m     = _args.deadband        if _args.deadband        is not None else CONTROL_DEADBAND_M
 _surface_delay  = _args.surface_delay   if _args.surface_delay   is not None else TEST_SURFACE_DELAY_S
 _surface_extend = _args.surface_extend  if _args.surface_extend  is not None else TEST_SURFACE_EXTEND_S
 _sensor_offset  = _args.sensor_offset   if _args.sensor_offset   is not None else SENSOR_DEPTH_OFFSET_M
 _target_bottom  = (_args.target_bottom  if _args.target_bottom  is not None else TARGET_BOTTOM_M)  - _sensor_offset
 _target_surface = (_args.target_surface if _args.target_surface is not None else TARGET_SURFACE_M) - _sensor_offset
+_full_duty      = _args.duty            if _args.duty            is not None else ACTUATOR_DUTY_CYCLE
+_approach_zone  = _args.approach_zone   if _args.approach_zone   is not None else APPROACH_ZONE_M
+_min_duty       = _args.min_duty        if _args.min_duty        is not None else MIN_DUTY_PCT
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
-BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
-BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
-DATA_PATH = os.path.join(BASE_DIR, DATA_FILE)
-RUNS_DIR  = os.path.join(BASE_DIR, 'runs')
-LOG_PATH  = os.path.join(BASE_DIR, 'float.log')
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+BIAS_PATH    = os.path.join(BASE_DIR, BIAS_FILE)
+DATA_PATH    = os.path.join(BASE_DIR, DATA_FILE)
+RUNS_DIR     = os.path.join(BASE_DIR, 'runs')
+LOG_PATH     = os.path.join(BASE_DIR, 'float.log')
+STATUS_PATH  = os.path.join(BASE_DIR, 'mission_status.json')
 
 # ── simulation ───────────────────────────────────────────────────────────────
 # In sim mode the depth sensor is replaced with a virtual model driven by
@@ -133,6 +140,28 @@ log.addHandler(_sh)
 _depth_bias_m = 0.0
 
 
+def _set_stage(stage):
+    """Write current mission stage to a file so server.py can display it."""
+    try:
+        with open(STATUS_PATH, 'w') as f:
+            json.dump({'stage': stage,
+                       'time':  datetime.now().strftime('%H:%M:%S')}, f)
+    except Exception:
+        pass
+    log.info(f"Stage: {stage}")
+
+
+def _proportional_duty(dist_m):
+    """Return duty cycle based on distance from target.
+    Full speed when far away; ramps down linearly to _min_duty within
+    _approach_zone of the target to reduce overshoot."""
+    if _approach_zone <= 0:
+        return _full_duty
+    factor = min(1.0, abs(dist_m) / _approach_zone)
+    duty = int(_min_duty + (_full_duty - _min_duty) * factor)
+    return max(_min_duty, min(100, duty))
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def loadBias():
@@ -205,7 +234,7 @@ def archivePreviousRun():
 
 def moveToDepth(targetM):
     log.info(f"Moving to {targetM:.2f} m...")
-    last_log = time.time() - 2  # log immediately on first read
+    last_log = time.time() - 2
     while True:
         current, _ = readTrueDepthAndPressure()
         if current is None:
@@ -217,14 +246,16 @@ def moveToDepth(targetM):
             actuator.stopActuator()
             log.info(f"Reached target {targetM:.2f} m  (sensor {current:.3f} m)")
             return
+        duty = _proportional_duty(diff)
+        actuator.setDutyCycle(duty)
         if diff < 0:
             actuator.retractActuator()
         else:
             actuator.extendActuator()
-        # Log depth every 2 seconds so we can see the float moving
         if now - last_log >= 2.0:
             direction = "sinking ↓" if diff < 0 else "rising ↑"
-            log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m  diff {diff:+.3f} m")
+            log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m"
+                     f"  diff {diff:+.3f} m  duty {duty}%")
             last_log = now
         time.sleep(0.1)
 
@@ -257,8 +288,10 @@ def holdDepthAndLog(targetM, mission_start):
             continue
 
         if diff < -_deadband_m:
+            actuator.setDutyCycle(_proportional_duty(diff))
             actuator.retractActuator()
         elif diff > _deadband_m:
+            actuator.setDutyCycle(_proportional_duty(diff))
             actuator.extendActuator()
         else:
             actuator.stopActuator()
@@ -283,9 +316,13 @@ def executeProfile(number, mission_start):
     log.info(f"Sensor targets: bottom {_target_bottom:.2f} m, surface {_target_surface:.2f} m"
              + (f"  (offset {_sensor_offset:+.3f} m)" if _sensor_offset else ""))
     packets = []
+    _set_stage(f"profile_{number}_descent")
     moveToDepth(_target_bottom)
+    _set_stage(f"profile_{number}_hold_bottom")
     packets += holdDepthAndLog(_target_bottom, mission_start)
+    _set_stage(f"profile_{number}_ascent")
     moveToDepth(_target_surface)
+    _set_stage(f"profile_{number}_hold_surface")
     packets += holdDepthAndLog(_target_surface, mission_start)
     return packets
 
@@ -350,11 +387,11 @@ def main():
         if not loadBias():
             calibrateBias()
 
+    _set_stage('starting')
     archivePreviousRun()
 
     actuator.setupActuator()
-    if _args.duty is not None:
-        actuator.setDutyCycle(_args.duty)
+    actuator.setDutyCycle(_full_duty)
 
     mission_start = time.time()
     all_packets   = []
@@ -366,8 +403,10 @@ def main():
     log.info(f"\nBoth profiles complete in {elapsed:.0f}s. "
              f"{len(all_packets)} packets logged. Actuator stopped.")
     actuator.stopActuator()
+    _set_stage('profiles_complete')
 
     if _test_mode:
+        _set_stage('surfacing')
         log.info(f"\nTEST MODE: waiting {_surface_delay:.0f}s then surfacing...")
         time.sleep(_surface_delay)
         log.info(f"Surfacing — extending for {_surface_extend:.0f}s...")
@@ -378,7 +417,9 @@ def main():
     else:
         log.info("Waiting for ROV recovery...")
 
+    _set_stage('transmitting')
     transmitData()
+    _set_stage('done')
 
 
 if __name__ == "__main__":

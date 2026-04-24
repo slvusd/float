@@ -391,14 +391,16 @@ def tuning_page():
     except Exception:
         pass
 
-    duty    = cfg.get('duty_cycle',         80)
-    db      = cfg.get('deadband_m',         0.03)
-    delay   = cfg.get('surface_delay_s',    60)
-    extend  = cfg.get('surface_extend_s',   30)
-    bot     = cfg.get('target_bottom_m',    TARGET_BOTTOM_M)
-    surf    = cfg.get('target_surface_m',   TARGET_SURFACE_M)
-    tol     = cfg.get('tolerance_m',        TOLERANCE_M)
-    offset  = cfg.get('sensor_offset_m',    0.0)
+    duty         = cfg.get('duty_cycle',         80)
+    db           = cfg.get('deadband_m',         0.03)
+    delay        = cfg.get('surface_delay_s',    60)
+    extend       = cfg.get('surface_extend_s',   30)
+    bot          = cfg.get('target_bottom_m',    TARGET_BOTTOM_M)
+    surf         = cfg.get('target_surface_m',   TARGET_SURFACE_M)
+    tol          = cfg.get('tolerance_m',        TOLERANCE_M)
+    offset       = cfg.get('sensor_offset_m',    0.0)
+    approach_zone = cfg.get('approach_zone_m',   0.50)
+    min_duty     = cfg.get('min_duty_pct',       30)
     float_ok = bool(cfg)
 
     html = f"""<!DOCTYPE html>
@@ -431,6 +433,7 @@ def tuning_page():
   .pill{{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.78rem;font-weight:700}}
   .running{{background:#cce5ff;color:#004085}}
   .idle{{background:#e2e3e5;color:#383d41}}
+  .warn{{background:#fff3cd;color:#856404}}
   .ok{{background:#d4edda;color:#155724}}
   .err{{background:#f8d7da;color:#721c24}}
   .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}
@@ -470,6 +473,26 @@ def tuning_page():
         <input type="range" id="deadband" min="0.01" max="0.15" step="0.01" value="{db}"
                oninput="document.getElementById('db-val').textContent=parseFloat(this.value).toFixed(2)+' m'">
         <span class="val" id="db-val">{db:.2f} m</span>
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Approach Zone (m)</label>
+      <div class="desc">Start slowing when this far from target. Duty ramps from max down to min to reduce overshoot.</div>
+      <div class="row">
+        <input type="range" id="approach-zone" min="0.1" max="1.5" step="0.05" value="{approach_zone}"
+               oninput="document.getElementById('az-val').textContent=parseFloat(this.value).toFixed(2)+' m'">
+        <span class="val" id="az-val">{approach_zone:.2f} m</span>
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Min Duty % (near target)</label>
+      <div class="desc">Minimum speed when very close to target. Below 25% the motor may stall under pressure.</div>
+      <div class="row">
+        <input type="range" id="min-duty" min="15" max="60" step="5" value="{min_duty}"
+               oninput="document.getElementById('md-val').textContent=this.value+'%'">
+        <span class="val" id="md-val">{min_duty}%</span>
       </div>
     </div>
 
@@ -545,6 +568,7 @@ def tuning_page():
     </div>
     <button style="background:#5a3e85;color:#fff;border:none;border-radius:6px;padding:.5rem 1rem;font-size:.9rem;font-weight:700;cursor:pointer"
             onclick="startSim()">&#x1F52C; Sim Run (dry)</button>
+    <button class="btn-stop" onclick="abortRun()">&#x1F6D1; Abort</button>
   </div>
 
   <div class="card">
@@ -552,11 +576,13 @@ def tuning_page():
     <div id="msg"></div>
     <div class="status-row">Float <span id="float-conn" class="pill {'ok' if float_ok else 'err'}">&nbsp;</span></div>
     <div class="status-row">Mission <span id="mission-badge" class="pill idle">idle</span></div>
+    <div class="status-row" style="font-size:.82rem;color:#555">Stage <span id="stage-lbl">—</span></div>
     <div class="status-row">Packets (float) <span id="float-pkts">—</span></div>
     <div class="status-row">Received here <span id="ctrl-pkts">—</span></div>
     <br>
     <button class="btn-test" onclick="startTest()">&#x1F9EA; Start Test Run</button>
     <button class="btn-stop" onclick="stopRun()">&#x23F9; Stop</button>
+    <button class="btn-stop" onclick="abortRun()" style="background:#7b0000">&#x1F6D1; Abort</button>
   </div>
 </div>
 
@@ -607,7 +633,9 @@ function buildCmd(extra='') {{
   const tb     = document.getElementById('target-bottom').value;
   const ts     = document.getElementById('target-surface').value;
   const off    = document.getElementById('sensor-offset').value;
-  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}${{extra}}`;
+  const az     = document.getElementById('approach-zone').value;
+  const md     = document.getElementById('min-duty').value;
+  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}${{extra}}`;
 }}
 
 function startSim() {{
@@ -639,6 +667,13 @@ function stopRun() {{
   fetch('/float/stop', {{method:'POST'}}).then(() => msg('Stop sent.'));
 }}
 
+function abortRun() {{
+  fetch('/float/abort', {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => msg(d.status || d.error || 'aborted'))
+    .catch(e => msg(e.toString(), true));
+}}
+
 function pollAll() {{
   fetch('/float/status')
     .then(r => r.json())
@@ -646,8 +681,12 @@ function pollAll() {{
       document.getElementById('float-conn').textContent = 'reachable';
       document.getElementById('float-conn').className = 'pill ok';
       const b = document.getElementById('mission-badge');
-      b.textContent = d.mission_running ? 'running' : 'idle';
-      b.className = 'pill ' + (d.mission_running ? 'running' : 'idle');
+      const label = d.profiles_complete ? 'transmitting' : (d.mission_running ? 'running' : 'idle');
+      const cls   = d.profiles_complete ? 'warn' : (d.mission_running ? 'running' : 'idle');
+      b.textContent = label;
+      b.className = 'pill ' + cls;
+      document.getElementById('stage-lbl').textContent =
+        d.stage ? d.stage.replace(/_/g,' ') + (d.stage_time ? '  ' + d.stage_time : '') : '—';
       document.getElementById('float-pkts').textContent = d.packets_logged;
     }})
     .catch(() => {{

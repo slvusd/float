@@ -37,6 +37,13 @@ CALIBRATION_SAMPLES = 10
 ACTUATOR_DUTY_CYCLE  = 80    # H-bridge PWM duty % (100 = full speed, ~80 recommended)
 # CONTROL_DEADBAND_M is already defined above in Mission parameters
 
+# Proportional speed: slow down as float approaches target depth.
+# Within APPROACH_ZONE_M of the target, duty ramps linearly from
+# ACTUATOR_DUTY_CYCLE down to MIN_DUTY_PCT. Never goes below 25% — below
+# that the motor may stall under water pressure.
+APPROACH_ZONE_M  = 0.50   # metres: start slowing this far from target
+MIN_DUTY_PCT     = 30     # minimum duty % when very close to target
+
 # Physical distance from the depth sensor to the competition reference point
 # (bottom of float for descent, same offset for ascent).
 # Example: sensor mounted 0.15 m above the float's bottom face → SENSOR_DEPTH_OFFSET_M = 0.15
