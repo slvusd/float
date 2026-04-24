@@ -225,15 +225,25 @@ setInterval(refreshPlot, 30000);
 
 
 # ── actuator endpoints ────────────────────────────────────────────────────────
+# GPIO is set up per-request and released after, so the mission subprocess
+# can always claim the pins without conflict.
+
+def _actuator_op(fn, duration=None):
+    GPIO.setwarnings(False)
+    actuator.setupActuator()
+    fn()
+    if duration:
+        time.sleep(duration)
+    actuator.stopActuator()
+    actuator.cleanupActuator()
+
 
 @app.route('/extend', methods=['POST'])
 def extend():
     if _mission_running():
         return jsonify({'error': 'Mission in progress'}), 409
     duration = float(request.args.get('duration', 20))
-    actuator.extendActuator()
-    time.sleep(duration)
-    actuator.stopActuator()
+    _actuator_op(actuator.extendActuator, duration)
     return jsonify({'status': 'done', 'duration': duration})
 
 
@@ -242,15 +252,16 @@ def retract():
     if _mission_running():
         return jsonify({'error': 'Mission in progress'}), 409
     duration = float(request.args.get('duration', 20))
-    actuator.retractActuator()
-    time.sleep(duration)
-    actuator.stopActuator()
+    _actuator_op(actuator.retractActuator, duration)
     return jsonify({'status': 'done', 'duration': duration})
 
 
 @app.route('/stop', methods=['POST'])
 def stop():
-    actuator.stopActuator()
+    try:
+        _actuator_op(lambda: None)  # setup → stop → cleanup
+    except Exception:
+        pass
     return jsonify({'status': 'stopped'})
 
 
@@ -765,7 +776,8 @@ def network():
 # ── startup ───────────────────────────────────────────────────────────────────
 
 GPIO.setwarnings(False)
-actuator.setupActuator()
+# Actuator GPIO is NOT held at startup — claimed per-request so the
+# mission subprocess (depthadjust.py) can always claim the pins cleanly.
 depth_sensor.initSensor()
 
 if __name__ == '__main__':
