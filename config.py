@@ -12,8 +12,12 @@ ACTUATOR_PIN_ENABLE_BOARD   = 13   # H-bridge enable pin
 SENSOR_MODEL   = "02BA"
 SENSOR_I2C_BUS = 1      # default Raspberry Pi I2C bus
 
-# Competition call sign — update before each run
-CALL_SIGN = "PLACEHOLDER01"
+# Competition call sign
+CALL_SIGN = "RN08"
+
+# Persistent files (relative to repo root)
+BIAS_FILE = "bias.json"
+DATA_FILE = "data.csv"
 
 # Mission parameters
 TARGET_BOTTOM_M     = 2.50

@@ -44,6 +44,14 @@ def readDepthMM():
     sensor.read(ms5837.OSR_8192)
     return sensor.depth() * 1000
 
+def readSensor():
+    """Single I2C read; returns (depth_m, pressure_kpa) or (None, None) on error."""
+    if sensor is None:
+        print("Attempted to read from sensor before it was initialized")
+        return None, None
+    sensor.read(ms5837.OSR_8192)
+    return sensor.depth(), sensor.pressure(ms5837.UNITS_kPa)
+
 def readLoop():
     if (sensor == None):
         print("Attempted to read from sensor before it was initialized")

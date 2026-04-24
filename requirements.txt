@@ -1,5 +1,9 @@
-# Dependencies are installed via apt (no internet required):
-#   python3-rpi.gpio  — GPIO control
-#   python3-smbus2    — I2C bus for depth sensor
+# pip packages (requires internet on first install)
+flask
+matplotlib
+
+# System packages installed via apt (no internet required):
+#   python3-rpi-lgpio  — GPIO / H-bridge control
+#   python3-smbus2     — I2C bus for depth sensor
 #
 # ms5837 sensor library is vendored in ms5837/
