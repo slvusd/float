@@ -37,6 +37,13 @@ CALIBRATION_SAMPLES = 10
 ACTUATOR_DUTY_CYCLE  = 80    # H-bridge PWM duty % (100 = full speed, ~80 recommended)
 # CONTROL_DEADBAND_M is already defined above in Mission parameters
 
+# Physical distance from the depth sensor to the competition reference point
+# (bottom of float for descent, same offset for ascent).
+# Example: sensor mounted 0.15 m above the float's bottom face → SENSOR_DEPTH_OFFSET_M = 0.15
+# Effect: sensor target = competition target - offset
+# (sensor reads shallower than the bottom by this amount)
+SENSOR_DEPTH_OFFSET_M = 0.0
+
 # ── Test mode ─────────────────────────────────────────────────────────────────
 # Set TEST_MODE = True for pool tests without the ROV.
 # After both profiles complete, the float waits TEST_SURFACE_DELAY_S seconds

@@ -373,13 +373,14 @@ def tuning_page():
     except Exception:
         pass
 
-    duty    = cfg.get('duty_cycle',       80)
-    db      = cfg.get('deadband_m',       0.03)
-    delay   = cfg.get('surface_delay_s',  60)
-    extend  = cfg.get('surface_extend_s', 30)
-    bot     = cfg.get('target_bottom_m',  TARGET_BOTTOM_M)
-    surf    = cfg.get('target_surface_m', TARGET_SURFACE_M)
-    tol     = cfg.get('tolerance_m',      TOLERANCE_M)
+    duty    = cfg.get('duty_cycle',         80)
+    db      = cfg.get('deadband_m',         0.03)
+    delay   = cfg.get('surface_delay_s',    60)
+    extend  = cfg.get('surface_extend_s',   30)
+    bot     = cfg.get('target_bottom_m',    TARGET_BOTTOM_M)
+    surf    = cfg.get('target_surface_m',   TARGET_SURFACE_M)
+    tol     = cfg.get('tolerance_m',        TOLERANCE_M)
+    offset  = cfg.get('sensor_offset_m',    0.0)
     float_ok = bool(cfg)
 
     html = f"""<!DOCTYPE html>
@@ -468,9 +469,44 @@ def tuning_page():
   </div>
 
   <div class="card">
+    <h2>Depth Settings</h2>
+
+    <div class="param">
+      <label>Sensor Position Offset (m)</label>
+      <div class="desc">Distance from sensor to float's bottom reference face. Sensor target = competition target − offset.</div>
+      <div class="row">
+        <input type="number" id="sensor-offset" min="-0.5" max="0.5" step="0.01" value="{offset:.3f}"
+               oninput="updateTargets()"> m
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Target Bottom (m) <span style="font-weight:400;color:#888;font-size:.78rem">competition: {bot} m</span></label>
+      <div class="desc">Reduce for shallow pool tests.</div>
+      <div class="row">
+        <input type="range" id="target-bottom" min="0.5" max="3.0" step="0.1" value="{bot}"
+               oninput="updateTargets()">
+        <span class="val" id="tb-val">{bot:.2f} m</span>
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Target Surface (m) <span style="font-weight:400;color:#888;font-size:.78rem">competition: {surf} m</span></label>
+      <div class="row">
+        <input type="range" id="target-surface" min="0.1" max="1.0" step="0.05" value="{surf}"
+               oninput="updateTargets()">
+        <span class="val" id="ts-val">{surf:.2f} m</span>
+      </div>
+    </div>
+
+    <div style="font-size:.82rem;background:#f8f8f8;border-radius:6px;padding:.5rem .75rem;margin-top:.4rem">
+      Effective sensor targets: bottom <b id="eff-bottom">—</b> &nbsp;|&nbsp; surface <b id="eff-surface">—</b>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Fixed (Competition Rules)</h2>
-    <div class="info-row"><span>Bottom target</span><span>{bot} m  (±{tol} m)</span></div>
-    <div class="info-row"><span>Surface target</span><span>{surf} m  (±{tol} m)</span></div>
+    <div class="info-row"><span>Valid window</span><span>±{tol} m</span></div>
     <div class="info-row"><span>Hold / packets</span><span>30 s · 7 pkts · 5 s</span></div>
     <div class="info-row"><span>Profiles</span><span>2</span></div>
   </div>
@@ -517,12 +553,25 @@ function msg(t, err) {{
   el.style.color = err ? '#c0392b' : '#0077b6';
 }}
 
+function updateTargets() {{
+  const tb  = parseFloat(document.getElementById('target-bottom').value);
+  const ts  = parseFloat(document.getElementById('target-surface').value);
+  const off = parseFloat(document.getElementById('sensor-offset').value) || 0;
+  document.getElementById('tb-val').textContent = tb.toFixed(2) + ' m';
+  document.getElementById('ts-val').textContent = ts.toFixed(2) + ' m';
+  document.getElementById('eff-bottom').textContent  = (tb - off).toFixed(2) + ' m';
+  document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
+}}
+
 function buildCmd() {{
   const duty   = document.getElementById('duty').value;
   const db     = document.getElementById('deadband').value;
   const delay  = document.getElementById('surface-delay').value;
   const ext    = document.getElementById('surface-extend').value;
-  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}`;
+  const tb     = document.getElementById('target-bottom').value;
+  const ts     = document.getElementById('target-surface').value;
+  const off    = document.getElementById('sensor-offset').value;
+  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}`;
 }}
 
 function startTest() {{
@@ -593,6 +642,7 @@ function refreshTable() {{
 }}
 
 // Start polling immediately
+updateTargets();
 _polling = setInterval(pollAll, 4000);
 pollAll();
 </script>

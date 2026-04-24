@@ -10,21 +10,31 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     HOLD_SECONDS, PACKET_INTERVAL_S, PACKETS_REQUIRED,
                     NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
-                    TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S)
+                    TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
+                    SENSOR_DEPTH_OFFSET_M)
 
 _parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument('--test',           action='store_true')
-_parser.add_argument('--duty',           type=float, default=None)
-_parser.add_argument('--deadband',       type=float, default=None)
-_parser.add_argument('--surface-delay',  type=float, default=None, dest='surface_delay')
-_parser.add_argument('--surface-extend', type=float, default=None, dest='surface_extend')
+_parser.add_argument('--test',            action='store_true')
+_parser.add_argument('--duty',            type=float, default=None)
+_parser.add_argument('--deadband',        type=float, default=None)
+_parser.add_argument('--surface-delay',   type=float, default=None, dest='surface_delay')
+_parser.add_argument('--surface-extend',  type=float, default=None, dest='surface_extend')
+_parser.add_argument('--target-bottom',   type=float, default=None, dest='target_bottom')
+_parser.add_argument('--target-surface',  type=float, default=None, dest='target_surface')
+_parser.add_argument('--sensor-offset',   type=float, default=None, dest='sensor_offset')
 _args, _ = _parser.parse_known_args()
 
 # Runtime values — CLI args override config, config is the fallback
 _test_mode      = _args.test or TEST_MODE
-_deadband_m     = _args.deadband       if _args.deadband       is not None else CONTROL_DEADBAND_M
-_surface_delay  = _args.surface_delay  if _args.surface_delay  is not None else TEST_SURFACE_DELAY_S
-_surface_extend = _args.surface_extend if _args.surface_extend is not None else TEST_SURFACE_EXTEND_S
+_deadband_m     = _args.deadband        if _args.deadband        is not None else CONTROL_DEADBAND_M
+_surface_delay  = _args.surface_delay   if _args.surface_delay   is not None else TEST_SURFACE_DELAY_S
+_surface_extend = _args.surface_extend  if _args.surface_extend  is not None else TEST_SURFACE_EXTEND_S
+_sensor_offset  = _args.sensor_offset   if _args.sensor_offset   is not None else SENSOR_DEPTH_OFFSET_M
+
+# Effective sensor targets = competition target - physical sensor offset
+# (sensor sits _sensor_offset metres above the competition reference point)
+_target_bottom  = (_args.target_bottom  if _args.target_bottom  is not None else TARGET_BOTTOM_M)  - _sensor_offset
+_target_surface = (_args.target_surface if _args.target_surface is not None else TARGET_SURFACE_M) - _sensor_offset
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
@@ -128,11 +138,13 @@ def holdDepthAndLog(targetM, mission_start):
 
 def executeProfile(number, mission_start):
     print(f"\n=== Profile {number} of {NUM_PROFILES} ===")
+    print(f"    Sensor targets: bottom {_target_bottom:.2f} m, surface {_target_surface:.2f} m"
+          + (f"  (offset {_sensor_offset:+.2f} m)" if _sensor_offset else ""))
     packets = []
-    moveToDepth(TARGET_BOTTOM_M)
-    packets += holdDepthAndLog(TARGET_BOTTOM_M, mission_start)
-    moveToDepth(TARGET_SURFACE_M)
-    packets += holdDepthAndLog(TARGET_SURFACE_M, mission_start)
+    moveToDepth(_target_bottom)
+    packets += holdDepthAndLog(_target_bottom, mission_start)
+    moveToDepth(_target_surface)
+    packets += holdDepthAndLog(_target_surface, mission_start)
     return packets
 
 
@@ -207,7 +219,8 @@ def main():
     actuator.setupActuator()
     if _args.duty is not None:
         actuator.setDutyCycle(_args.duty)
-    print(f"Deadband: {_deadband_m:.3f} m  |  Test mode: {_test_mode}")
+    print(f"Deadband: {_deadband_m:.3f} m | Sensor offset: {_sensor_offset:+.3f} m | "
+          f"Targets: {_target_bottom:.2f} m / {_target_surface:.2f} m | Test: {_test_mode}")
     mission_start = time.time()
     all_packets = []
 

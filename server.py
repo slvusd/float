@@ -19,7 +19,8 @@ import RPi.GPIO as GPIO
 from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     ACTUATOR_DUTY_CYCLE, CONTROL_DEADBAND_M,
-                    TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S)
+                    TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
+                    SENSOR_DEPTH_OFFSET_M)
 
 app = Flask(__name__)
 
@@ -301,7 +302,10 @@ def start_mission():
     if 'duty'           in a:       cmd += ['--duty',           a['duty']]
     if 'deadband'       in a:       cmd += ['--deadband',       a['deadband']]
     if 'surface_delay'  in a:       cmd += ['--surface-delay',  a['surface_delay']]
-    if 'surface_extend' in a:       cmd += ['--surface-extend', a['surface_extend']]
+    if 'surface_extend'  in a:      cmd += ['--surface-extend',  a['surface_extend']]
+    if 'target_bottom'   in a:      cmd += ['--target-bottom',   a['target_bottom']]
+    if 'target_surface'  in a:      cmd += ['--target-surface',  a['target_surface']]
+    if 'sensor_offset'   in a:      cmd += ['--sensor-offset',   a['sensor_offset']]
     _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
     return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
                     'test_mode': test, 'cmd': cmd[2:]})
@@ -366,13 +370,14 @@ def get_plot():
 @app.route('/config')
 def get_config():
     return jsonify({
-        'duty_cycle':       ACTUATOR_DUTY_CYCLE,
-        'deadband_m':       CONTROL_DEADBAND_M,
-        'surface_delay_s':  TEST_SURFACE_DELAY_S,
-        'surface_extend_s': TEST_SURFACE_EXTEND_S,
-        'target_bottom_m':  TARGET_BOTTOM_M,
-        'target_surface_m': TARGET_SURFACE_M,
-        'tolerance_m':      TOLERANCE_M,
+        'duty_cycle':         ACTUATOR_DUTY_CYCLE,
+        'deadband_m':         CONTROL_DEADBAND_M,
+        'surface_delay_s':    TEST_SURFACE_DELAY_S,
+        'surface_extend_s':   TEST_SURFACE_EXTEND_S,
+        'target_bottom_m':    TARGET_BOTTOM_M,
+        'target_surface_m':   TARGET_SURFACE_M,
+        'tolerance_m':        TOLERANCE_M,
+        'sensor_offset_m':    SENSOR_DEPTH_OFFSET_M,
     })
 
 
@@ -455,9 +460,46 @@ def tuning_page():
 </div>
 
 <div class="card">
-  <h2>Fixed Competition Parameters</h2>
-  <div class="info-row"><span>Bottom target</span><span>{TARGET_BOTTOM_M} m  (valid {TARGET_BOTTOM_M-TOLERANCE_M:.2f}–{TARGET_BOTTOM_M+TOLERANCE_M:.2f} m)</span></div>
-  <div class="info-row"><span>Surface target</span><span>{TARGET_SURFACE_M} m  (valid {TARGET_SURFACE_M-TOLERANCE_M:.2f}–{TARGET_SURFACE_M+TOLERANCE_M:.2f} m)</span></div>
+  <h2>Depth Settings</h2>
+
+  <div class="param">
+    <label>Sensor Position Offset (m)</label>
+    <div class="desc">Distance from sensor to the float's bottom reference point (competition measurement face).
+    Sensor target = competition target − offset. Measure once, set in config.py; override here for testing.</div>
+    <div class="row">
+      <input type="number" id="sensor-offset" min="-0.5" max="0.5" step="0.01" value="{SENSOR_DEPTH_OFFSET_M:.3f}"> m
+      <span style="font-size:.8rem;color:#888" id="sensor-note"></span>
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Target Bottom Depth (m) <span style="font-weight:400;color:#888;font-size:.8rem">— competition: {TARGET_BOTTOM_M} m</span></label>
+    <div class="desc">Reduce for shallow pool tests. Sensor will target this minus the offset above.</div>
+    <div class="row">
+      <input type="range" id="target-bottom" min="0.5" max="3.0" step="0.1" value="{TARGET_BOTTOM_M}"
+             oninput="updateTargets()">
+      <span class="val" id="tb-val">{TARGET_BOTTOM_M:.2f} m</span>
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Target Surface Depth (m) <span style="font-weight:400;color:#888;font-size:.8rem">— competition: {TARGET_SURFACE_M} m</span></label>
+    <div class="desc">Adjust if testing at a different surface hold depth.</div>
+    <div class="row">
+      <input type="range" id="target-surface" min="0.1" max="1.0" step="0.05" value="{TARGET_SURFACE_M}"
+             oninput="updateTargets()">
+      <span class="val" id="ts-val">{TARGET_SURFACE_M:.2f} m</span>
+    </div>
+  </div>
+
+  <div style="font-size:.82rem;background:#f8f8f8;border-radius:6px;padding:.5rem .75rem;margin-top:.4rem">
+    Effective sensor targets: bottom <b id="eff-bottom">—</b> &nbsp;|&nbsp; surface <b id="eff-surface">—</b>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Fixed (Competition Rules)</h2>
+  <div class="info-row"><span>Valid window</span><span>±{TOLERANCE_M} m ({TOLERANCE_M*100:.0f} cm)</span></div>
   <div class="info-row"><span>Hold time</span><span>30 s · 7 packets · 5 s interval</span></div>
   <div class="info-row"><span>Profiles</span><span>2</span></div>
 </div>
@@ -486,13 +528,28 @@ function msg(text, err) {{
   el.style.color = err ? '#c0392b' : '#0077b6';
 }}
 
+function updateTargets() {{
+  const tb  = parseFloat(document.getElementById('target-bottom').value);
+  const ts  = parseFloat(document.getElementById('target-surface').value);
+  const off = parseFloat(document.getElementById('sensor-offset').value) || 0;
+  document.getElementById('tb-val').textContent = tb.toFixed(2) + ' m';
+  document.getElementById('ts-val').textContent = ts.toFixed(2) + ' m';
+  document.getElementById('eff-bottom').textContent  = (tb - off).toFixed(2) + ' m';
+  document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
+}}
+
 function buildUrl() {{
   const duty    = document.getElementById('duty').value;
   const db      = document.getElementById('deadband').value;
   const delay   = document.getElementById('surface-delay').value;
   const extend  = document.getElementById('surface-extend').value;
-  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}`;
+  const tb      = document.getElementById('target-bottom').value;
+  const ts      = document.getElementById('target-surface').value;
+  const off     = document.getElementById('sensor-offset').value;
+  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}`;
 }}
+
+updateTargets();
 
 function startTest() {{
   msg('Starting test run…');
