@@ -67,54 +67,84 @@ if _sim_mode:
     import random
 
     class _SimSensor:
-        """Virtual depth sensor. Direction: +1 sinking, -1 rising, 0 stopped."""
+        """Physics-based depth model.
+
+        The syringe position (+1 = retracted/heavy, -1 = extended/light) integrates
+        from motor direction × duty cycle.  Buoyancy from syringe drives velocity;
+        drag limits terminal speed.  The float has slight natural positive buoyancy
+        so it drifts up slowly when the motor is off and the syringe is near neutral.
+
+        rate = terminal descent speed at full syringe deflection (maps to sim_rate slider).
+        """
+        _DRAG        = 0.5    # velocity damping 1/s
+        _STROKE_RATE = 0.20   # syringe units/s at 100 % duty — full ±1 stroke in 5 s
+        _NATURAL     = -0.006 # m/s²: slight upward bias (float prefers to surface)
+
         def __init__(self, rate):
-            self._depth = 0.0
-            self._dir   = 0
-            self._rate  = rate
-            self._t     = time.time()
+            # buoy_gain chosen so terminal velocity at syringe=1 equals rate
+            self._buoy_gain = rate * self._DRAG - self._NATURAL
+            self._depth    = 0.0
+            self._velocity = 0.0
+            self._syringe  = 0.0   # +1 retracted/heavy, -1 extended/light
+            self._dir      = 0     # +1 retract/sink, -1 extend/rise, 0 stop
+            self._duty     = 1.0   # 0..1 fraction
+            self._t        = time.time()
 
         def set_dir(self, d):
-            self._tick()   # flush elapsed time before changing direction
+            self._tick()
             self._dir = d
+
+        def set_duty(self, pct):
+            self._duty = max(0.0, min(1.0, pct / 100.0))
 
         def _tick(self):
             now = time.time()
-            dt  = now - self._t
+            dt  = min(now - self._t, 0.5)   # cap to avoid big jumps on pause
             self._t = now
-            # Active movement + slight positive-buoyancy drift when stopped
-            drift = -0.001 if self._dir == 0 else 0
-            self._depth += (self._dir * self._rate + drift) * dt
-            self._depth += random.gauss(0, 0.004)    # sensor noise
-            self._depth  = max(-0.15, min(6.0, self._depth))
+
+            # Syringe moves only while motor is running, scaled by duty
+            stroke        = self._dir * self._STROKE_RATE * self._duty
+            self._syringe = max(-1.0, min(1.0, self._syringe + stroke * dt))
+
+            # Net vertical acceleration: buoyancy + natural drift − drag
+            buoyancy       = self._syringe * self._buoy_gain + self._NATURAL
+            self._velocity += (buoyancy - self._DRAG * self._velocity) * dt
+            self._depth    += self._velocity * dt
+            self._depth     = max(-0.15, min(6.0, self._depth))
 
         def read(self):
             self._tick()
             pressure = 101.3 + max(0.0, self._depth) * 9.794  # kPa freshwater
-            return self._depth, pressure
+            return self._depth + random.gauss(0, 0.003), pressure
 
     _sim_sensor = _SimSensor(_sim_rate)
 
-    # Wrap actuator calls so the sim sensor tracks direction while GPIO still fires
-    _real_retract = actuator.retractActuator
-    _real_extend  = actuator.extendActuator
-    _real_stop    = actuator.stopActuator
+    # Wrap actuator calls: sim sensor tracks direction/duty, real GPIO still fires
+    _real_retract  = actuator.retractActuator
+    _real_extend   = actuator.extendActuator
+    _real_stop     = actuator.stopActuator
+    _real_set_duty = actuator.setDutyCycle
 
     def _sim_retract():
         _real_retract()
-        _sim_sensor.set_dir(1)   # retract → sinking
+        _sim_sensor.set_dir(1)    # retract → syringe fills → heavy → sinking
 
     def _sim_extend():
         _real_extend()
-        _sim_sensor.set_dir(-1)  # extend  → rising
+        _sim_sensor.set_dir(-1)   # extend  → syringe empties → light → rising
 
     def _sim_stop():
         _real_stop()
-        _sim_sensor.set_dir(0)
+        _sim_sensor.set_dir(0)    # motor off — buoyancy unchanged, float coasts
+
+    def _sim_set_duty(pct):
+        _real_set_duty(pct)
+        _sim_sensor.set_duty(pct)
 
     actuator.retractActuator = _sim_retract
     actuator.extendActuator  = _sim_extend
     actuator.stopActuator    = _sim_stop
+    actuator.setDutyCycle    = _sim_set_duty
 
 
 # ── logging ───────────────────────────────────────────────────────────────────
