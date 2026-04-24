@@ -390,7 +390,10 @@ def status():
         'profiles_complete':  stage.get('stage') in ('profiles_complete',
                                                       'surfacing', 'transmitting', 'done'),
         'bias_m':             _load_bias(),
-        'packets_logged':     _packet_count()
+        'packets_logged':     _packet_count(),
+        'depth_m':            stage.get('depth_m'),
+        'elapsed_s':          stage.get('elapsed_s'),
+        'actuator':           stage.get('actuator', ''),
     })
 
 
@@ -724,6 +727,37 @@ def tuning_page():
   <button class="btn-neutral" onclick="location.href='/plot'" style="float:right">&#x1F4C8; View plot</button>
 </div>
 
+<div id="live-card" style="display:none" class="card">
+  <h2>Live View</h2>
+  <div style="display:flex;gap:1.5rem;align-items:flex-start">
+    <div style="flex:0 0 auto;position:relative;height:280px;width:96px">
+      <div style="position:absolute;left:0;top:0;width:44px;height:280px;
+                  background:linear-gradient(180deg,#e8f6ff,#b8d8f0);
+                  border:2px solid #8aabb8;border-radius:5px;overflow:hidden">
+        <div id="g-surf-zone" style="position:absolute;width:100%;background:rgba(39,174,96,.22)"></div>
+        <div id="g-bot-zone"  style="position:absolute;width:100%;background:rgba(192,57,43,.18)"></div>
+        <div id="g-float"     style="position:absolute;left:2px;width:36px;height:10px;
+                                     border-radius:3px;background:#0077b6;
+                                     transition:top .5s ease,background .3s ease"></div>
+      </div>
+      <div style="position:absolute;left:50px;top:-6px;font-size:.65rem;color:#888">0 m</div>
+      <div id="g-lbl-surf" style="position:absolute;left:50px;font-size:.65rem;color:#27ae60;font-weight:700;white-space:nowrap"></div>
+      <div id="g-lbl-bot"  style="position:absolute;left:50px;font-size:.65rem;color:#c0392b;font-weight:700;white-space:nowrap"></div>
+      <div style="position:absolute;left:50px;bottom:-6px;font-size:.65rem;color:#888">3 m</div>
+    </div>
+    <div>
+      <div id="l-depth" style="font-size:2.2rem;font-weight:700;font-family:monospace;color:#0077b6;line-height:1.1">—</div>
+      <div style="font-size:.75rem;color:#888;margin-bottom:.7rem">metres depth</div>
+      <table style="font-size:.86rem;border-collapse:collapse">
+        <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Elapsed</td><td id="l-elapsed" style="font-family:monospace;font-weight:600">—</td></tr>
+        <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Stage</td>  <td id="l-stage"    style="font-weight:600">—</td></tr>
+        <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Motor</td>  <td id="l-actuator" style="font-weight:600">—</td></tr>
+        <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Packets</td><td id="l-packets"  style="font-weight:600">—</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div id="plot-card" style="display:none" class="card">
   <h2>Last Run Plot</h2>
   <img id="plot-img" src="" alt="plot">
@@ -739,6 +773,28 @@ function msg(text, err) {{
   el.style.color = err ? '#c0392b' : '#0077b6';
 }}
 
+const _GH = 280, _GM = 3.1;   // gauge height px, max depth m
+function _d2y(d) {{ return Math.max(0, Math.min(_GH, d / _GM * _GH)); }}
+
+function initGauge() {{
+  const tb  = parseFloat(document.getElementById('target-bottom').value)  || {TARGET_BOTTOM_M};
+  const ts  = parseFloat(document.getElementById('target-surface').value) || {TARGET_SURFACE_M};
+  const tol = 0.33;
+  const bz  = document.getElementById('g-bot-zone');
+  if (!bz) return;
+  bz.style.top    = _d2y(tb - tol) + 'px';
+  bz.style.height = (_d2y(tb + tol) - _d2y(tb - tol)) + 'px';
+  const bl = document.getElementById('g-lbl-bot');
+  bl.style.top = (_d2y(tb) - 7) + 'px';
+  bl.textContent = tb.toFixed(1) + ' m';
+  const sz = document.getElementById('g-surf-zone');
+  sz.style.top    = _d2y(ts - tol) + 'px';
+  sz.style.height = (_d2y(ts + tol) - _d2y(ts - tol)) + 'px';
+  const sl = document.getElementById('g-lbl-surf');
+  sl.style.top = (_d2y(ts) - 7) + 'px';
+  sl.textContent = ts.toFixed(1) + ' m';
+}}
+
 function updateTargets() {{
   const tb  = parseFloat(document.getElementById('target-bottom').value);
   const ts  = parseFloat(document.getElementById('target-surface').value);
@@ -747,6 +803,7 @@ function updateTargets() {{
   document.getElementById('ts-val').textContent = ts.toFixed(2) + ' m';
   document.getElementById('eff-bottom').textContent  = (tb - off).toFixed(2) + ' m';
   document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
+  initGauge();
 }}
 
 function buildUrl(extra='') {{
@@ -762,6 +819,53 @@ function buildUrl(extra='') {{
   return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}${{extra}}`;
 }}
 
+let _liveInterval = null;
+
+function startLive() {{
+  document.getElementById('live-card').style.display = '';
+  initGauge();
+  if (_liveInterval) clearInterval(_liveInterval);
+  _liveInterval = setInterval(updateLive, 1000);
+  updateLive();
+}}
+
+function updateLive() {{
+  fetch('/status').then(r=>r.json()).then(d=>{{
+    // mission badge + stage (Real Run card)
+    const b = document.getElementById('mission-badge');
+    const label = d.profiles_complete ? 'transmitting' : (d.mission_running ? 'running' : 'idle');
+    const cls   = d.profiles_complete ? 'warn' : (d.mission_running ? 'running' : 'idle');
+    b.textContent = label; b.className = 'pill ' + cls;
+    document.getElementById('packets').textContent = d.packets_logged;
+    document.getElementById('stage-lbl').textContent =
+      d.stage ? d.stage.replace(/_/g,' ') + (d.stage_time ? '  ' + d.stage_time : '') : '—';
+
+    // live panel stats
+    document.getElementById('l-depth').textContent   = d.depth_m != null ? (+d.depth_m).toFixed(2) : '—';
+    document.getElementById('l-elapsed').textContent = d.elapsed_s != null ? (+d.elapsed_s).toFixed(0) + ' s' : '—';
+    document.getElementById('l-stage').textContent   = d.stage ? d.stage.replace(/_/g,' ') : '—';
+    document.getElementById('l-packets').textContent = d.packets_logged;
+    const act = document.getElementById('l-actuator');
+    const astr = d.actuator || '—';
+    act.textContent = astr;
+    act.style.color = astr.includes('retract') ? '#c0392b' :
+                      astr.includes('extend')  ? '#27ae60' : '#555';
+
+    // gauge float marker
+    if (d.depth_m != null) {{
+      const m = document.getElementById('g-float');
+      m.style.top        = (_d2y(+d.depth_m) - 5) + 'px';
+      m.style.background = astr.includes('retract') ? '#c0392b' :
+                           astr.includes('extend')  ? '#27ae60' : '#0077b6';
+    }}
+
+    if (!d.mission_running && !d.profiles_complete) {{
+      if (_liveInterval) {{ clearInterval(_liveInterval); _liveInterval = null; }}
+      if (d.packets_logged >= 2) showPlot();
+    }}
+  }}).catch(()=>{{}});
+}}
+
 function startSim() {{
   const rate = document.getElementById('sim-rate').value;
   msg('Starting sim run…');
@@ -769,8 +873,8 @@ function startSim() {{
     .then(r => r.json())
     .then(d => {{
       if (d.error) {{ msg(d.error, true); return; }}
-      msg('Sim running at ' + rate + ' m/s — watch the depth change');
-      startPolling();
+      msg('Sim running at ' + rate + ' m/s');
+      startPolling(); startLive();
     }})
     .catch(e => msg(e.toString(), true));
 }}
@@ -784,7 +888,7 @@ function startTest() {{
     .then(d => {{
       if (d.error) {{ msg(d.error, true); return; }}
       msg('Running: ' + JSON.stringify(d.cmd));
-      startPolling();
+      startPolling(); startLive();
     }})
     .catch(e => msg(e.toString(), true));
 }}

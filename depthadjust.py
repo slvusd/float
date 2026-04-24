@@ -170,15 +170,38 @@ log.addHandler(_sh)
 _depth_bias_m = 0.0
 
 
-def _set_stage(stage):
-    """Write current mission stage to a file so server.py can display it."""
+_live_t          = 0.0   # throttle live-status writes to ~400 ms
+_mission_start_t = None  # set in main() for elapsed-time calculation
+
+
+def _write_status(update):
+    """Read-modify-write STATUS_PATH so stage and live fields coexist."""
     try:
+        st = {}
+        if os.path.exists(STATUS_PATH):
+            with open(STATUS_PATH) as f:
+                st = json.load(f)
+        st.update(update)
         with open(STATUS_PATH, 'w') as f:
-            json.dump({'stage': stage,
-                       'time':  datetime.now().strftime('%H:%M:%S')}, f)
+            json.dump(st, f)
     except Exception:
         pass
+
+
+def _set_stage(stage):
+    _write_status({'stage': stage, 'time': datetime.now().strftime('%H:%M:%S')})
     log.info(f"Stage: {stage}")
+
+
+def _live_update(depth_m, actuator):
+    """Push current depth/actuator to STATUS_PATH; called every control-loop tick."""
+    global _live_t
+    now = time.time()
+    if now - _live_t < 0.4:
+        return
+    _live_t = now
+    elapsed = round(now - _mission_start_t, 1) if _mission_start_t else 0.0
+    _write_status({'depth_m': round(depth_m, 3), 'elapsed_s': elapsed, 'actuator': actuator})
 
 
 def _proportional_duty(dist_m):
@@ -280,8 +303,10 @@ def moveToDepth(targetM):
         actuator.setDutyCycle(duty)
         if diff < 0:
             actuator.retractActuator()
+            _live_update(current, 'retracting ↓')
         else:
             actuator.extendActuator()
+            _live_update(current, 'extending ↑')
         if now - last_log >= 2.0:
             direction = "sinking ↓" if diff < 0 else "rising ↑"
             log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m"
@@ -320,11 +345,14 @@ def holdDepthAndLog(targetM, mission_start):
         if diff < -_deadband_m:
             actuator.setDutyCycle(_proportional_duty(diff))
             actuator.retractActuator()
+            _live_update(current, 'retracting ↓')
         elif diff > _deadband_m:
             actuator.setDutyCycle(_proportional_duty(diff))
             actuator.extendActuator()
+            _live_update(current, 'extending ↑')
         else:
             actuator.stopActuator()
+            _live_update(current, 'holding ◼')
 
         if now - lastPacket >= PACKET_INTERVAL_S:
             elapsed = now - mission_start
@@ -417,13 +445,15 @@ def main():
         if not loadBias():
             calibrateBias()
 
+    global _mission_start_t
     _set_stage('starting')
     archivePreviousRun()
 
     actuator.setupActuator()
     actuator.setDutyCycle(_full_duty)
 
-    mission_start = time.time()
+    mission_start    = time.time()
+    _mission_start_t = mission_start
     all_packets   = []
 
     for i in range(NUM_PROFILES):
