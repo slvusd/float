@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import csv
+import glob
 import io
 import json
 import os
@@ -95,7 +96,7 @@ def index():
 </style>
 </head>
 <body>
-<h1>&#x1F4E1; {CALL_SIGN} Float Control &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a></h1>
+<h1>&#x1F4E1; {CALL_SIGN} Float Control &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a> &nbsp;<a href="/runs" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4C1; Runs</a> &nbsp;<a href="/log" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4CB; Log</a></h1>
 
 <div class="grid">
   <div class="card">
@@ -362,6 +363,84 @@ def get_plot():
     fig.savefig(buf, format='jpeg', dpi=150)
     plt.close(fig)
     buf.seek(0)
+    return send_file(buf, mimetype='image/jpeg')
+
+
+# ── log / run history ────────────────────────────────────────────────────────
+
+@app.route('/log')
+def get_log():
+    log_path = os.path.join(BASE_DIR, 'float.log')
+    if not os.path.exists(log_path):
+        return Response("No log file yet — mission hasn't run.\n", mimetype='text/plain')
+    with open(log_path) as f:
+        lines = f.readlines()
+    return Response(''.join(lines[-200:]), mimetype='text/plain')
+
+
+@app.route('/runs')
+def list_runs():
+    runs_dir = os.path.join(BASE_DIR, 'runs')
+    runs = sorted(glob.glob(os.path.join(runs_dir, 'run_*.csv')), reverse=True) if os.path.exists(runs_dir) else []
+    names = [os.path.basename(r) for r in runs]
+    rows  = ''.join(
+        f'<tr><td>{n}</td>'
+        f'<td><a href="/runs/{n}" download>download</a></td>'
+        f'<td><a href="/runs/{n}/plot">plot</a></td></tr>'
+        for n in names
+    ) or '<tr><td colspan="3" style="color:#888">No archived runs yet.</td></tr>'
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>{CALL_SIGN} Run History</title>
+<style>body{{font-family:system-ui,sans-serif;padding:1rem 1.5rem;background:#f4f6f8}}
+h1{{font-size:1.2rem}}a{{color:#0077b6}}
+table{{border-collapse:collapse;width:100%}}th,td{{padding:.4rem .8rem;border-bottom:1px solid #eee;text-align:left}}
+th{{background:#f0f2f5;font-size:.82rem;text-transform:uppercase}}</style></head>
+<body><h1>&#x1F4C1; {CALL_SIGN} Run History</h1>
+<p><a href="/">← Main UI</a> &nbsp; <a href="/log">View log</a></p>
+<table><thead><tr><th>Run</th><th>CSV</th><th>Plot</th></tr></thead>
+<tbody>{rows}</tbody></table></body></html>"""
+    return Response(html, mimetype='text/html')
+
+
+@app.route('/runs/<name>')
+def download_run(name):
+    if not name.endswith('.csv') or '/' in name:
+        return jsonify({'error': 'invalid'}), 400
+    path = os.path.join(BASE_DIR, 'runs', name)
+    if not os.path.exists(path):
+        return jsonify({'error': 'not found'}), 404
+    return send_file(path, mimetype='text/csv', as_attachment=True, download_name=name)
+
+
+@app.route('/runs/<name>/plot')
+def run_plot(name):
+    if not name.endswith('.csv') or '/' in name:
+        return jsonify({'error': 'invalid'}), 400
+    path = os.path.join(BASE_DIR, 'runs', name)
+    if not os.path.exists(path):
+        return jsonify({'error': 'not found'}), 404
+    times, depths = [], []
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            times.append(float(row['elapsed_s']))
+            depths.append(float(row['depth_m']))
+    if len(depths) < 2:
+        return jsonify({'error': 'not enough data'}), 400
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.plot(times, depths, 'b-o', markersize=3.5, linewidth=1.5)
+    ax.invert_yaxis()
+    ax.set_xlabel('Elapsed Time (s)')
+    ax.set_ylabel('Depth (m)')
+    ax.set_title(f'{CALL_SIGN} — {name}', fontsize=12)
+    ax.axhline(y=TARGET_BOTTOM_M,  color='r', linestyle='--', alpha=0.7, label=f'Bottom {TARGET_BOTTOM_M} m')
+    ax.axhline(y=TARGET_SURFACE_M, color='g', linestyle='--', alpha=0.7, label=f'Surface {TARGET_SURFACE_M} m')
+    ax.legend(); ax.grid(True, alpha=0.3); plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='jpeg', dpi=150)
+    plt.close(fig); buf.seek(0)
     return send_file(buf, mimetype='image/jpeg')
 
 

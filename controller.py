@@ -175,7 +175,7 @@ def index():
 </style>
 </head>
 <body>
-<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.85rem;color:#888">port {CONTROLLER_PORT}</small> &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a></h1>
+<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.85rem;color:#888">port {CONTROLLER_PORT}</small> &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a> &nbsp;<a href="/float/runs" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4C1; Runs</a> &nbsp;<a href="/float/log" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F4CB; Log</a></h1>
 
 <div class="grid2">
   <div class="card">

@@ -1,7 +1,11 @@
 import argparse
 import csv
+import glob
 import json
+import logging
+import logging.handlers
 import os
+import shutil
 import time
 from datetime import datetime
 import actuator
@@ -12,6 +16,8 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
                     SENSOR_DEPTH_OFFSET_M)
+
+# ── CLI args ──────────────────────────────────────────────────────────────────
 
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument('--test',            action='store_true')
@@ -30,39 +36,70 @@ _deadband_m     = _args.deadband        if _args.deadband        is not None els
 _surface_delay  = _args.surface_delay   if _args.surface_delay   is not None else TEST_SURFACE_DELAY_S
 _surface_extend = _args.surface_extend  if _args.surface_extend  is not None else TEST_SURFACE_EXTEND_S
 _sensor_offset  = _args.sensor_offset   if _args.sensor_offset   is not None else SENSOR_DEPTH_OFFSET_M
-
-# Effective sensor targets = competition target - physical sensor offset
-# (sensor sits _sensor_offset metres above the competition reference point)
 _target_bottom  = (_args.target_bottom  if _args.target_bottom  is not None else TARGET_BOTTOM_M)  - _sensor_offset
 _target_surface = (_args.target_surface if _args.target_surface is not None else TARGET_SURFACE_M) - _sensor_offset
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# ── paths ─────────────────────────────────────────────────────────────────────
+
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
 DATA_PATH = os.path.join(BASE_DIR, DATA_FILE)
+RUNS_DIR  = os.path.join(BASE_DIR, 'runs')
+LOG_PATH  = os.path.join(BASE_DIR, 'float.log')
+
+# ── logging ───────────────────────────────────────────────────────────────────
+
+log = logging.getLogger('float')
+log.setLevel(logging.DEBUG)
+
+_fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s',
+                         datefmt='%H:%M:%S')
+
+# Rotating log file — 500 KB, keep 5 files (~2.5 MB total)
+_fh = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=500_000, backupCount=5)
+_fh.setFormatter(_fmt)
+log.addHandler(_fh)
+
+# Also to stdout → systemd journal
+_sh = logging.StreamHandler()
+_sh.setFormatter(_fmt)
+log.addHandler(_sh)
+
+# ── state ─────────────────────────────────────────────────────────────────────
 
 _depth_bias_m = 0.0
 
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def loadBias():
     global _depth_bias_m
     if os.path.exists(BIAS_PATH):
         with open(BIAS_PATH) as f:
             _depth_bias_m = float(json.load(f).get('bias_m', 0.0))
-        print(f"Loaded bias from file: {_depth_bias_m:.4f} m")
+        log.info(f"Bias loaded from file: {_depth_bias_m:.4f} m")
         return True
     return False
 
 
 def calibrateBias():
     global _depth_bias_m
-    print("Calibrating — float must be at the surface...")
+    log.info("Calibrating bias — float must be at the surface...")
     samples = [depth.readDepthM() for _ in range(CALIBRATION_SAMPLES) if not time.sleep(0.2)]
     _depth_bias_m = sum(samples) / len(samples)
-    print(f"Depth bias: {_depth_bias_m:.4f} m")
+    log.info(f"Bias set to {_depth_bias_m:.4f} m")
 
 
 def readTrueDepthAndPressure():
+    """Read sensor with one retry. Returns (depth_m, pressure_kpa) or (None, None)."""
     depth_m, pressure_kpa = depth.readSensor()
+    if depth_m is None:
+        log.warning("Sensor read returned None — retrying once")
+        time.sleep(0.05)
+        depth_m, pressure_kpa = depth.readSensor()
+    if depth_m is None:
+        log.error("Sensor read failed twice in a row")
+        return None, None
     return depth_m - _depth_bias_m, pressure_kpa
 
 
@@ -81,38 +118,75 @@ def logPacket(elapsed_s, depth_m, pressure_kpa, packet_str):
                          f'{pressure_kpa:.1f}', packet_str])
 
 
+def archivePreviousRun():
+    """Copy data.csv to runs/ with a timestamp. Keep last 10 runs."""
+    if not os.path.exists(DATA_PATH):
+        return
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    ts   = datetime.now().strftime('%Y%m%d_%H%M%S')
+    dest = os.path.join(RUNS_DIR, f'run_{ts}.csv')
+    shutil.copy2(DATA_PATH, dest)
+    log.info(f"Archived previous run → runs/run_{ts}.csv")
+    # Trim: keep only the 10 most recent
+    all_runs = sorted(glob.glob(os.path.join(RUNS_DIR, 'run_*.csv')))
+    for old in all_runs[:-10]:
+        os.remove(old)
+        log.debug(f"Removed old run archive: {os.path.basename(old)}")
+    os.remove(DATA_PATH)
+
+
+# ── mission logic ─────────────────────────────────────────────────────────────
+
 def moveToDepth(targetM):
-    print(f"Moving to {targetM:.2f} m...")
+    log.info(f"Moving to {targetM:.2f} m...")
+    last_log = time.time() - 2  # log immediately on first read
     while True:
         current, _ = readTrueDepthAndPressure()
+        if current is None:
+            time.sleep(0.1)
+            continue
+        now  = time.time()
         diff = current - targetM
         if abs(diff) <= TOLERANCE_M:
             actuator.stopActuator()
+            log.info(f"Reached target {targetM:.2f} m  (sensor {current:.3f} m)")
             return
         if diff < 0:
             actuator.retractActuator()
         else:
             actuator.extendActuator()
+        # Log depth every 2 seconds so we can see the float moving
+        if now - last_log >= 2.0:
+            direction = "sinking ↓" if diff < 0 else "rising ↑"
+            log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m  diff {diff:+.3f} m")
+            last_log = now
         time.sleep(0.1)
 
 
 def holdDepthAndLog(targetM, mission_start):
-    packets = []
-    holdStart = time.time()
-    lastPacketTime = holdStart
+    packets    = []
+    holdStart  = time.time()
+    lastPacket = holdStart
+    resetCount = 0
 
-    print(f"Holding at {targetM:.2f} m...")
+    log.info(f"Holding at {targetM:.2f} m (need {PACKETS_REQUIRED} packets)...")
 
     while len(packets) < PACKETS_REQUIRED:
         now = time.time()
         current, pressure_kpa = readTrueDepthAndPressure()
+        if current is None:
+            log.warning("Skipping control cycle — sensor read failed")
+            time.sleep(0.1)
+            continue
         diff = current - targetM
 
         if abs(diff) > TOLERANCE_M:
-            print(f"Depth drifted to {current:.3f} m — restarting hold clock")
-            packets = []
-            holdStart = now
-            lastPacketTime = now
+            resetCount += 1
+            log.warning(f"Depth drifted to {current:.3f} m (±{TOLERANCE_M} m limit) — "
+                        f"restarting hold clock (reset #{resetCount})")
+            packets    = []
+            holdStart  = now
+            lastPacket = now
             moveToDepth(targetM)
             continue
 
@@ -123,23 +197,25 @@ def holdDepthAndLog(targetM, mission_start):
         else:
             actuator.stopActuator()
 
-        if now - lastPacketTime >= PACKET_INTERVAL_S:
+        if now - lastPacket >= PACKET_INTERVAL_S:
             elapsed = now - mission_start
-            packet = createDataPacket(current, pressure_kpa)
+            packet  = createDataPacket(current, pressure_kpa)
             packets.append(packet)
             logPacket(elapsed, current, pressure_kpa, packet)
-            print(f"  Packet {len(packets)}/{PACKETS_REQUIRED}: {packet}")
-            lastPacketTime = now
+            log.info(f"  Packet {len(packets)}/{PACKETS_REQUIRED}: {packet}")
+            lastPacket = now
 
         time.sleep(0.1)
 
+    if resetCount:
+        log.info(f"Hold complete — {resetCount} clock reset(s) during this hold")
     return packets
 
 
 def executeProfile(number, mission_start):
-    print(f"\n=== Profile {number} of {NUM_PROFILES} ===")
-    print(f"    Sensor targets: bottom {_target_bottom:.2f} m, surface {_target_surface:.2f} m"
-          + (f"  (offset {_sensor_offset:+.2f} m)" if _sensor_offset else ""))
+    log.info(f"\n=== Profile {number} of {NUM_PROFILES} ===")
+    log.info(f"Sensor targets: bottom {_target_bottom:.2f} m, surface {_target_surface:.2f} m"
+             + (f"  (offset {_sensor_offset:+.3f} m)" if _sensor_offset else ""))
     packets = []
     moveToDepth(_target_bottom)
     packets += holdDepthAndLog(_target_bottom, mission_start)
@@ -149,38 +225,24 @@ def executeProfile(number, mission_start):
 
 
 def transmitData():
-    """Transmit data.csv to the controller, retrying until successful.
-
-    The float is likely underwater with no WiFi when this starts — that is
-    expected and fine.  Each attempt uses a 5-second timeout so it fails fast
-    instead of hanging.  Once the ROV brings the float above water, WiFi
-    reconnects and the next retry succeeds.
-
-    Schedule:
-      - Every 10 seconds until the first 200/204 response.
-      - Every 30 seconds after that, indefinitely.
-
-    Sending duplicates is harmless — the controller just overwrites the file
-    each time, which is exactly what we want for debugging confidence.
-    """
+    """Retry loop: send data.csv to controller every 10s until first 200/204,
+    then every 30s as a heartbeat. Fails fast (5s timeout) while underwater."""
     if not os.path.exists(DATA_PATH):
-        print("No data file found — nothing to transmit.")
+        log.warning("transmitData: no data file found")
         return
 
     import requests
 
-    # Print all logged packets to stdout for local record
-    print("\n--- Logged packets ---")
+    log.info("\n--- Logged packets ---")
     with open(DATA_PATH) as f:
         for row in csv.DictReader(f):
-            print(" ", row.get('packet', ''))
+            log.info("  " + row.get('packet', ''))
 
     url = f"http://{CONTROLLER_IP}:{CONTROLLER_PORT}/receive"
-    print(f"\n--- Transmission loop → {url} ---")
-    print("Retrying every 10s until first success, then every 30s. Ctrl+C to stop.\n")
+    log.info(f"\n--- Transmission loop → {url} (10s retry, 30s heartbeat after success) ---\n")
 
     first_success = False
-    attempt = 0
+    attempt       = 0
 
     while True:
         attempt += 1
@@ -190,59 +252,63 @@ def transmitData():
                                   headers={'Content-Type': 'text/csv'}, timeout=5)
             if r.status_code in (200, 204):
                 if not first_success:
-                    print(f"Attempt {attempt}: SUCCESS ({r.status_code}) — "
-                          f"controller confirmed receipt. Switching to 30s heartbeat.")
+                    log.info(f"Attempt {attempt}: SUCCESS ({r.status_code}) — "
+                             f"controller confirmed. Switching to 30s heartbeat.")
                     first_success = True
                 else:
-                    print(f"Attempt {attempt}: heartbeat confirmed ({r.status_code})")
+                    log.info(f"Attempt {attempt}: heartbeat confirmed ({r.status_code})")
             else:
-                print(f"Attempt {attempt}: unexpected status {r.status_code}")
+                log.warning(f"Attempt {attempt}: unexpected status {r.status_code}")
         except Exception as e:
-            print(f"Attempt {attempt}: no link ({type(e).__name__}) — "
-                  f"still underwater? retrying in 10s")
+            log.info(f"Attempt {attempt}: no link ({type(e).__name__}) — "
+                     f"still underwater?")
 
         time.sleep(30 if first_success else 10)
 
 
 def main():
+    log.info("=" * 60)
+    log.info(f"Float mission starting  call={CALL_SIGN}  test={_test_mode}")
+    log.info(f"  duty={_args.duty or 'config'}  deadband={_deadband_m:.3f} m"
+             f"  offset={_sensor_offset:+.3f} m")
+    log.info(f"  targets: bottom {_target_bottom:.2f} m  surface {_target_surface:.2f} m")
+    log.info("=" * 60)
+
     if not depth.initSensor():
-        print("Sensor init failed — aborting")
+        log.error("Sensor init failed — aborting mission")
         return
 
     if not loadBias():
         calibrateBias()
 
-    # Clear previous run data
-    if os.path.exists(DATA_PATH):
-        os.remove(DATA_PATH)
+    archivePreviousRun()
 
     actuator.setupActuator()
     if _args.duty is not None:
         actuator.setDutyCycle(_args.duty)
-    print(f"Deadband: {_deadband_m:.3f} m | Sensor offset: {_sensor_offset:+.3f} m | "
-          f"Targets: {_target_bottom:.2f} m / {_target_surface:.2f} m | Test: {_test_mode}")
+
     mission_start = time.time()
-    all_packets = []
+    all_packets   = []
 
     for i in range(NUM_PROFILES):
         all_packets.extend(executeProfile(i + 1, mission_start))
 
-    print("\nProfiles complete. Actuator stopped.")
+    elapsed = time.time() - mission_start
+    log.info(f"\nBoth profiles complete in {elapsed:.0f}s. "
+             f"{len(all_packets)} packets logged. Actuator stopped.")
     actuator.stopActuator()
 
     if _test_mode:
-        print(f"\nTEST MODE: waiting {_surface_delay:.0f}s then surfacing for manual retrieval...")
+        log.info(f"\nTEST MODE: waiting {_surface_delay:.0f}s then surfacing...")
         time.sleep(_surface_delay)
-        print(f"Surfacing — extending for {_surface_extend:.0f}s...")
+        log.info(f"Surfacing — extending for {_surface_extend:.0f}s...")
         actuator.extendActuator()
         time.sleep(_surface_extend)
         actuator.stopActuator()
-        print("Surfaced. Waiting for retrieval.")
+        log.info("Surfaced. Waiting for retrieval.")
     else:
-        print("Waiting for ROV recovery...")
+        log.info("Waiting for ROV recovery...")
 
-    # Immediately begin transmission loop — will keep retrying until the float
-    # is above water and WiFi connects, then continues as a 30s heartbeat.
     transmitData()
 
 
