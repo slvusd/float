@@ -11,6 +11,7 @@ Usage:
     python test_actuator.py --duration 10    # run each direction 10s
 """
 import argparse
+import gc
 import time
 import RPi.GPIO as GPIO
 import actuator
@@ -56,5 +57,7 @@ except KeyboardInterrupt:
 
 finally:
     pwm.stop()
+    del pwm
+    gc.collect()   # force PWM.__del__ now, while chip handle is still valid
     GPIO.cleanup()
     print("Done.")
