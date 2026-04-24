@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import csv
+import hashlib
 import io
 import os
 
@@ -16,10 +17,35 @@ app = Flask(__name__)
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH  = os.path.join(BASE_DIR, 'received_data.csv')
+HASH_PATH  = os.path.join(BASE_DIR, 'received_data.hash')
 FLOAT_BASE = f"http://{FLOAT_IP}:{FLOAT_PORT}"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _data_hash(text):
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def _stored_hash():
+    if os.path.exists(HASH_PATH):
+        with open(HASH_PATH) as f:
+            return f.read().strip()
+    return None
+
+
+def _save_data(text):
+    """Write CSV and update stored hash. Returns (packets, hash_short, is_new)."""
+    incoming = _data_hash(text)
+    is_new   = incoming != _stored_hash()
+    if is_new:
+        with open(DATA_PATH, 'w') as f:
+            f.write(text)
+        with open(HASH_PATH, 'w') as f:
+            f.write(incoming)
+    packets = max(0, text.count('\n') - 1)
+    return packets, incoming[:8], is_new
+
 
 def _float_status():
     try:
@@ -269,11 +295,16 @@ def receive():
         data = request.files['file'].read().decode()
     else:
         data = request.get_data(as_text=True)
-    with open(DATA_PATH, 'w') as f:
-        f.write(data)
-    packets = max(0, data.count('\n') - 1)
-    print(f"[receive] data from {request.remote_addr} — {packets} packets stored", flush=True)
-    return jsonify({'status': 'received', 'packets': packets})
+    packets, hsh, is_new = _save_data(data)
+    if is_new:
+        print(f"[receive] NEW data from {request.remote_addr} — "
+              f"{packets} packets  id={hsh}", flush=True)
+        status = 'received'
+    else:
+        print(f"[receive] heartbeat from {request.remote_addr} — "
+              f"{packets} packets, no change  id={hsh}", flush=True)
+        status = 'heartbeat'
+    return jsonify({'status': status, 'packets': packets, 'id': hsh})
 
 
 @app.route('/fetch', methods=['POST'])
@@ -283,11 +314,14 @@ def fetch():
         r = req.get(f"{FLOAT_BASE}/data", timeout=10)
         if r.status_code != 200:
             return jsonify({'error': 'Float returned no data'}), 502
-        with open(DATA_PATH, 'wb') as f:
-            f.write(r.content)
-        packets = max(0, r.text.count('\n') - 1)
-        print(f"[fetch] pulled {packets} packets from float", flush=True)
-        return jsonify({'status': 'fetched', 'packets': packets})
+        packets, hsh, is_new = _save_data(r.text)
+        if is_new:
+            print(f"[fetch] NEW data pulled from float — "
+                  f"{packets} packets  id={hsh}", flush=True)
+        else:
+            print(f"[fetch] pulled from float — no change  id={hsh}", flush=True)
+        return jsonify({'status': 'fetched', 'packets': packets,
+                        'id': hsh, 'new': is_new})
     except Exception as e:
         print(f"[fetch] failed: {e}", flush=True)
         return jsonify({'error': str(e)}), 503
