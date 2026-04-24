@@ -16,8 +16,10 @@ from flask import Flask, jsonify, request, send_file, Response
 import depthdetect as depth_sensor
 import actuator
 import RPi.GPIO as GPIO
-from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M,
-                    BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT)
+from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
+                    BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
+                    ACTUATOR_DUTY_CYCLE, CONTROL_DEADBAND_M,
+                    TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S)
 
 app = Flask(__name__)
 
@@ -92,7 +94,7 @@ def index():
 </style>
 </head>
 <body>
-<h1>&#x1F4E1; {CALL_SIGN} Float Control</h1>
+<h1>&#x1F4E1; {CALL_SIGN} Float Control &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a></h1>
 
 <div class="grid">
   <div class="card">
@@ -291,12 +293,18 @@ def start_mission():
     global _mission_proc
     if _mission_running():
         return jsonify({'error': 'Mission already running'}), 409
-    test = request.args.get('test', '').lower() in ('1', 'true', 'yes')
+    a = request.args
+    test = a.get('test', '').lower() in ('1', 'true', 'yes')
     script = os.path.join(BASE_DIR, 'depthadjust.py')
-    cmd = [sys.executable, script] + (['--test'] if test else [])
+    cmd = [sys.executable, script]
+    if test:                        cmd.append('--test')
+    if 'duty'           in a:       cmd += ['--duty',           a['duty']]
+    if 'deadband'       in a:       cmd += ['--deadband',       a['deadband']]
+    if 'surface_delay'  in a:       cmd += ['--surface-delay',  a['surface_delay']]
+    if 'surface_extend' in a:       cmd += ['--surface-extend', a['surface_extend']]
     _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
     return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
-                    'test_mode': test})
+                    'test_mode': test, 'cmd': cmd[2:]})
 
 
 @app.route('/status')
@@ -351,6 +359,189 @@ def get_plot():
     plt.close(fig)
     buf.seek(0)
     return send_file(buf, mimetype='image/jpeg')
+
+
+# ── config / tuning ──────────────────────────────────────────────────────────
+
+@app.route('/config')
+def get_config():
+    return jsonify({
+        'duty_cycle':       ACTUATOR_DUTY_CYCLE,
+        'deadband_m':       CONTROL_DEADBAND_M,
+        'surface_delay_s':  TEST_SURFACE_DELAY_S,
+        'surface_extend_s': TEST_SURFACE_EXTEND_S,
+        'target_bottom_m':  TARGET_BOTTOM_M,
+        'target_surface_m': TARGET_SURFACE_M,
+        'tolerance_m':      TOLERANCE_M,
+    })
+
+
+@app.route('/tuning')
+def tuning_page():
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{CALL_SIGN} — Tuning</title>
+<style>
+  body{{font-family:system-ui,sans-serif;margin:0;padding:1rem 1.5rem;background:#f4f6f8;color:#1a1a2e}}
+  h1{{margin:0 0 .25rem;font-size:1.3rem}}
+  .back{{font-size:.85rem;color:#0077b6;text-decoration:none}}
+  .card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.1);margin:1rem 0}}
+  h2{{margin:0 0 .75rem;font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#555}}
+  .param{{margin:.6rem 0}}
+  .param label{{display:block;font-size:.88rem;font-weight:600;margin-bottom:.2rem}}
+  .param .desc{{font-size:.78rem;color:#666;margin-bottom:.3rem}}
+  .row{{display:flex;align-items:center;gap:.6rem}}
+  input[type=range]{{flex:1;accent-color:#0077b6}}
+  input[type=number]{{width:5rem;padding:.35rem .5rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem}}
+  .val{{min-width:3.5rem;font-weight:600;font-family:monospace;font-size:.9rem}}
+  .info-row{{display:flex;justify-content:space-between;font-size:.88rem;padding:.25rem 0;border-bottom:1px solid #f0f0f0}}
+  .info-row:last-child{{border:none}}
+  button{{cursor:pointer;border:none;border-radius:6px;padding:.55rem 1.1rem;font-size:.95rem;font-weight:700;margin:.3rem .3rem 0 0}}
+  .btn-test{{background:#e07b00;color:#fff;font-size:1rem;padding:.6rem 1.4rem}}
+  .btn-stop{{background:#c0392b;color:#fff}}
+  .btn-neutral{{background:#555;color:#fff}}
+  #msg{{min-height:1.1rem;font-size:.85rem;color:#0077b6;margin:.4rem 0}}
+  .pill{{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.78rem;font-weight:700}}
+  .running{{background:#cce5ff;color:#004085}}
+  .idle{{background:#e2e3e5;color:#383d41}}
+  #plot-img{{max-width:100%;border-radius:6px;margin-top:.5rem}}
+</style>
+</head>
+<body>
+<h1>&#x1F9EA; {CALL_SIGN} — Test &amp; Tuning</h1>
+<a class="back" href="/">← Back to main UI</a>
+
+<div class="card">
+  <h2>Tunable Parameters</h2>
+
+  <div class="param">
+    <label>Actuator Duty Cycle</label>
+    <div class="desc">Motor speed — lower = slower piston, less overshoot. Default: {ACTUATOR_DUTY_CYCLE}%</div>
+    <div class="row">
+      <input type="range" id="duty" min="20" max="100" step="5" value="{ACTUATOR_DUTY_CYCLE}"
+             oninput="document.getElementById('duty-val').textContent=this.value+'%'">
+      <span class="val" id="duty-val">{ACTUATOR_DUTY_CYCLE}%</span>
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Control Deadband (m)</label>
+    <div class="desc">Stop zone around target — wider = less hunting, more depth variation. Default: {CONTROL_DEADBAND_M} m</div>
+    <div class="row">
+      <input type="range" id="deadband" min="0.01" max="0.15" step="0.01" value="{CONTROL_DEADBAND_M}"
+             oninput="document.getElementById('db-val').textContent=parseFloat(this.value).toFixed(2)+' m'">
+      <span class="val" id="db-val">{CONTROL_DEADBAND_M} m</span>
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Surface Delay (s)</label>
+    <div class="desc">Seconds to wait at end of profiles before surfacing in test mode. Default: {TEST_SURFACE_DELAY_S} s</div>
+    <div class="row">
+      <input type="number" id="surface-delay" min="10" max="300" value="{TEST_SURFACE_DELAY_S}"> s
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Surface Extend (s)</label>
+    <div class="desc">Seconds to run extend motor when surfacing. Default: {TEST_SURFACE_EXTEND_S} s</div>
+    <div class="row">
+      <input type="number" id="surface-extend" min="10" max="60" value="{TEST_SURFACE_EXTEND_S}"> s
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Fixed Competition Parameters</h2>
+  <div class="info-row"><span>Bottom target</span><span>{TARGET_BOTTOM_M} m  (valid {TARGET_BOTTOM_M-TOLERANCE_M:.2f}–{TARGET_BOTTOM_M+TOLERANCE_M:.2f} m)</span></div>
+  <div class="info-row"><span>Surface target</span><span>{TARGET_SURFACE_M} m  (valid {TARGET_SURFACE_M-TOLERANCE_M:.2f}–{TARGET_SURFACE_M+TOLERANCE_M:.2f} m)</span></div>
+  <div class="info-row"><span>Hold time</span><span>30 s · 7 packets · 5 s interval</span></div>
+  <div class="info-row"><span>Profiles</span><span>2</span></div>
+</div>
+
+<div class="card">
+  <h2>Run</h2>
+  <div id="msg"></div>
+  <div style="margin-bottom:.5rem">Mission: <span id="mission-badge" class="pill idle">idle</span> &nbsp; Packets: <span id="packets">—</span></div>
+  <button class="btn-test" onclick="startTest()">&#x1F9EA; Start Test Run</button>
+  <button class="btn-stop" onclick="stopRun()">&#x23F9; Stop</button>
+  <button class="btn-neutral" onclick="location.href='/plot'" style="float:right">&#x1F4C8; View plot</button>
+</div>
+
+<div id="plot-card" style="display:none" class="card">
+  <h2>Last Run Plot</h2>
+  <img id="plot-img" src="" alt="plot">
+</div>
+
+<script>
+let _polling = null;
+let _lastPackets = 0;
+
+function msg(text, err) {{
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.style.color = err ? '#c0392b' : '#0077b6';
+}}
+
+function buildUrl() {{
+  const duty    = document.getElementById('duty').value;
+  const db      = document.getElementById('deadband').value;
+  const delay   = document.getElementById('surface-delay').value;
+  const extend  = document.getElementById('surface-extend').value;
+  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}`;
+}}
+
+function startTest() {{
+  msg('Starting test run…');
+  fetch(buildUrl(), {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ msg(d.error, true); return; }}
+      msg('Running: ' + JSON.stringify(d.cmd));
+      startPolling();
+    }})
+    .catch(e => msg(e.toString(), true));
+}}
+
+function stopRun() {{
+  fetch('/stop', {{method:'POST'}}).then(() => msg('Stopped.'));
+}}
+
+function startPolling() {{
+  if (_polling) clearInterval(_polling);
+  _polling = setInterval(pollStatus, 3000);
+  pollStatus();
+}}
+
+function pollStatus() {{
+  fetch('/status').then(r=>r.json()).then(d=>{{
+    const b = document.getElementById('mission-badge');
+    b.textContent = d.mission_running ? 'running' : 'idle';
+    b.className = 'pill ' + (d.mission_running ? 'running' : 'idle');
+    document.getElementById('packets').textContent = d.packets_logged;
+    if (!d.mission_running && _lastPackets !== d.packets_logged) {{
+      _lastPackets = d.packets_logged;
+      if (d.packets_logged >= 2) showPlot();
+      if (_polling) {{ clearInterval(_polling); _polling = null; }}
+    }}
+  }});
+}}
+
+function showPlot() {{
+  const card = document.getElementById('plot-card');
+  card.style.display = '';
+  document.getElementById('plot-img').src = '/plot?t=' + Date.now();
+}}
+
+pollStatus();
+setInterval(pollStatus, 5000);
+</script>
+</body>
+</html>"""
+    return Response(html, mimetype='text/html')
 
 
 # ── network status ───────────────────────────────────────────────────────────

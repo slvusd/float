@@ -175,7 +175,7 @@ def index():
 </style>
 </head>
 <body>
-<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.85rem;color:#888">port {CONTROLLER_PORT}</small></h1>
+<h1>&#x1F9FF; {CALL_SIGN} Controller &nbsp;<small style="font-weight:400;font-size:.85rem;color:#888">port {CONTROLLER_PORT}</small> &nbsp;<a href="/tuning" style="font-size:.8rem;font-weight:400;color:#0077b6">&#x1F9EA; Tuning</a></h1>
 
 <div class="grid2">
   <div class="card">
@@ -354,6 +354,247 @@ refreshFloatStatus();
 refreshSummary();
 setInterval(refreshFloatStatus, 5000);
 setInterval(refreshSummary, 5000);
+</script>
+</body>
+</html>"""
+    return Response(html, mimetype='text/html')
+
+
+# ── tuning page ──────────────────────────────────────────────────────────────
+
+@app.route('/tuning')
+def tuning_page():
+    # Load current config from float; fall back to defaults if unreachable
+    cfg = {}
+    try:
+        r = req.get(f"{FLOAT_BASE}/config", timeout=3)
+        if r.status_code == 200:
+            cfg = r.json()
+    except Exception:
+        pass
+
+    duty    = cfg.get('duty_cycle',       80)
+    db      = cfg.get('deadband_m',       0.03)
+    delay   = cfg.get('surface_delay_s',  60)
+    extend  = cfg.get('surface_extend_s', 30)
+    bot     = cfg.get('target_bottom_m',  TARGET_BOTTOM_M)
+    surf    = cfg.get('target_surface_m', TARGET_SURFACE_M)
+    tol     = cfg.get('tolerance_m',      TOLERANCE_M)
+    float_ok = bool(cfg)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{CALL_SIGN} — Tuning</title>
+<style>
+  body{{font-family:system-ui,sans-serif;margin:0;padding:1rem 1.5rem;background:#f0f2f5;color:#1a1a2e}}
+  h1{{margin:0 0 .25rem;font-size:1.3rem}}
+  .back{{font-size:.85rem;color:#0077b6;text-decoration:none}}
+  .card{{background:#fff;border-radius:8px;padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.08);margin:1rem 0}}
+  h2{{margin:0 0 .75rem;font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#555}}
+  .param{{margin:.7rem 0}}
+  .param label{{display:block;font-size:.9rem;font-weight:600;margin-bottom:.15rem}}
+  .desc{{font-size:.78rem;color:#666;margin-bottom:.3rem}}
+  .row{{display:flex;align-items:center;gap:.6rem}}
+  input[type=range]{{flex:1;accent-color:#0077b6}}
+  input[type=number]{{width:5rem;padding:.35rem .5rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem}}
+  .val{{min-width:4rem;font-weight:700;font-family:monospace;font-size:.9rem;color:#0077b6}}
+  .info-row{{display:flex;justify-content:space-between;font-size:.88rem;padding:.25rem 0;border-bottom:1px solid #f0f0f0}}
+  .info-row:last-child{{border:none}}
+  .status-row{{display:flex;justify-content:space-between;align-items:center;padding:.2rem 0;font-size:.92rem}}
+  button{{cursor:pointer;border:none;border-radius:6px;padding:.5rem 1rem;font-size:.9rem;font-weight:700;margin:.25rem .25rem 0 0}}
+  .btn-test{{background:#e07b00;color:#fff;font-size:1rem;padding:.65rem 1.5rem}}
+  .btn-stop{{background:#c0392b;color:#fff}}
+  .btn-neutral{{background:#555;color:#fff}}
+  #msg{{min-height:1.1rem;font-size:.82rem;color:#0077b6;margin:.4rem 0}}
+  .pill{{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.78rem;font-weight:700}}
+  .running{{background:#cce5ff;color:#004085}}
+  .idle{{background:#e2e3e5;color:#383d41}}
+  .ok{{background:#d4edda;color:#155724}}
+  .err{{background:#f8d7da;color:#721c24}}
+  .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}
+  #plot-img{{max-width:100%;border-radius:6px;display:block;margin-top:.5rem}}
+  table{{width:100%;border-collapse:collapse;font-size:.82rem}}
+  th{{background:#f0f2f5;padding:.35rem .6rem;text-align:left;font-weight:600;font-size:.78rem;text-transform:uppercase;color:#444;position:sticky;top:0}}
+  td{{padding:.3rem .6rem;border-bottom:1px solid #f0f0f0;font-family:monospace}}
+  .scroll{{max-height:260px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:6px;margin-top:.5rem}}
+</style>
+</head>
+<body>
+<h1>&#x1F9EA; {CALL_SIGN} — Test &amp; Tuning</h1>
+<a class="back" href="/">← Back to controller UI</a>
+
+{'<p style="color:#c0392b;font-size:.85rem">⚠ Float unreachable — showing default values. Parameters will be applied when run starts.</p>' if not float_ok else '<p style="color:#155724;font-size:.85rem">✓ Loaded current config from float.</p>'}
+
+<div class="grid2">
+
+<div>
+  <div class="card">
+    <h2>Tunable Parameters</h2>
+
+    <div class="param">
+      <label>Actuator Duty Cycle</label>
+      <div class="desc">Motor speed. Lower = slower piston, less overshoot.</div>
+      <div class="row">
+        <input type="range" id="duty" min="20" max="100" step="5" value="{duty}"
+               oninput="document.getElementById('duty-val').textContent=this.value+'%'">
+        <span class="val" id="duty-val">{duty}%</span>
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Control Deadband (m)</label>
+      <div class="desc">Stop zone around target. Wider = less hunting, more drift.</div>
+      <div class="row">
+        <input type="range" id="deadband" min="0.01" max="0.15" step="0.01" value="{db}"
+               oninput="document.getElementById('db-val').textContent=parseFloat(this.value).toFixed(2)+' m'">
+        <span class="val" id="db-val">{db:.2f} m</span>
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Surface Delay (s)</label>
+      <div class="desc">Wait after profiles before surfacing.</div>
+      <div class="row"><input type="number" id="surface-delay" min="10" max="300" value="{delay}"> s</div>
+    </div>
+
+    <div class="param">
+      <label>Surface Extend (s)</label>
+      <div class="desc">How long to run extend motor when surfacing.</div>
+      <div class="row"><input type="number" id="surface-extend" min="10" max="60" value="{extend}"> s</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Fixed (Competition Rules)</h2>
+    <div class="info-row"><span>Bottom target</span><span>{bot} m  (±{tol} m)</span></div>
+    <div class="info-row"><span>Surface target</span><span>{surf} m  (±{tol} m)</span></div>
+    <div class="info-row"><span>Hold / packets</span><span>30 s · 7 pkts · 5 s</span></div>
+    <div class="info-row"><span>Profiles</span><span>2</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Run</h2>
+    <div id="msg"></div>
+    <div class="status-row">Float <span id="float-conn" class="pill {'ok' if float_ok else 'err'}">&nbsp;</span></div>
+    <div class="status-row">Mission <span id="mission-badge" class="pill idle">idle</span></div>
+    <div class="status-row">Packets (float) <span id="float-pkts">—</span></div>
+    <div class="status-row">Received here <span id="ctrl-pkts">—</span></div>
+    <br>
+    <button class="btn-test" onclick="startTest()">&#x1F9EA; Start Test Run</button>
+    <button class="btn-stop" onclick="stopRun()">&#x23F9; Stop</button>
+  </div>
+</div>
+
+<div>
+  <div class="card" id="plot-card">
+    <h2>Plot &nbsp;<a href="/plot" target="_blank" style="font-size:.78rem;font-weight:400;color:#0077b6">full size</a></h2>
+    <div id="plot-container"><p style="color:#888;font-size:.85rem">Run a test to see plot here.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw Data</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>#</th><th>Elapsed</th><th>Depth (m)</th><th>Pressure (kPa)</th><th>Packet</th></tr></thead>
+        <tbody id="data-table"><tr><td colspan="5" style="color:#888;padding:.5rem;font-style:italic">No data yet.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</div><!-- grid2 -->
+
+<script>
+let _polling = null;
+let _lastDataId = null;
+
+function msg(t, err) {{
+  const el = document.getElementById('msg');
+  el.textContent = t;
+  el.style.color = err ? '#c0392b' : '#0077b6';
+}}
+
+function buildCmd() {{
+  const duty   = document.getElementById('duty').value;
+  const db     = document.getElementById('deadband').value;
+  const delay  = document.getElementById('surface-delay').value;
+  const ext    = document.getElementById('surface-extend').value;
+  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}`;
+}}
+
+function startTest() {{
+  msg('Sending start command…');
+  fetch(buildCmd(), {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ msg(d.error, true); return; }}
+      msg('Running — ' + (d.cmd ? d.cmd.join(' ') : 'ok'));
+      if (!_polling) _polling = setInterval(pollAll, 3000);
+    }})
+    .catch(e => msg(e.toString(), true));
+}}
+
+function stopRun() {{
+  fetch('/float/stop', {{method:'POST'}}).then(() => msg('Stop sent.'));
+}}
+
+function pollAll() {{
+  fetch('/float/status')
+    .then(r => r.json())
+    .then(d => {{
+      document.getElementById('float-conn').textContent = 'reachable';
+      document.getElementById('float-conn').className = 'pill ok';
+      const b = document.getElementById('mission-badge');
+      b.textContent = d.mission_running ? 'running' : 'idle';
+      b.className = 'pill ' + (d.mission_running ? 'running' : 'idle');
+      document.getElementById('float-pkts').textContent = d.packets_logged;
+    }})
+    .catch(() => {{
+      document.getElementById('float-conn').textContent = 'unreachable';
+      document.getElementById('float-conn').className = 'pill err';
+    }});
+
+  fetch('/events')
+    .then(r => r.json())
+    .then(ev => {{
+      document.getElementById('ctrl-pkts').textContent = ev.packets ?? '—';
+      if (ev.data_id && ev.data_id !== _lastDataId) {{
+        _lastDataId = ev.data_id;
+        refreshPlot();
+        refreshTable();
+      }}
+    }})
+    .catch(() => {{}});
+}}
+
+function refreshPlot() {{
+  const c = document.getElementById('plot-container');
+  const img = document.createElement('img');
+  img.id  = 'plot-img';
+  img.src = '/plot?t=' + Date.now();
+  img.onerror = () => {{ c.innerHTML = '<p style="color:#888">Plot not ready yet.</p>'; }};
+  c.innerHTML = '';
+  c.appendChild(img);
+}}
+
+function refreshTable() {{
+  fetch('/rawdata')
+    .then(r => r.json())
+    .then(rows => {{
+      if (!rows.length) return;
+      document.getElementById('data-table').innerHTML = rows.map((r,i) =>
+        `<tr><td>${{i+1}}</td><td>${{parseFloat(r.elapsed_s).toFixed(1)}}</td><td>${{parseFloat(r.depth_m).toFixed(4)}}</td><td>${{parseFloat(r.pressure_kpa).toFixed(1)}}</td><td>${{r.packet}}</td></tr>`
+      ).join('');
+    }})
+    .catch(() => {{}});
+}}
+
+// Start polling immediately
+_polling = setInterval(pollAll, 4000);
+pollAll();
 </script>
 </body>
 </html>"""

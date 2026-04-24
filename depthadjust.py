@@ -13,11 +13,18 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S)
 
 _parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument('--test', action='store_true',
-                     help='Test mode: surface after profiles for manual retrieval')
+_parser.add_argument('--test',           action='store_true')
+_parser.add_argument('--duty',           type=float, default=None)
+_parser.add_argument('--deadband',       type=float, default=None)
+_parser.add_argument('--surface-delay',  type=float, default=None, dest='surface_delay')
+_parser.add_argument('--surface-extend', type=float, default=None, dest='surface_extend')
 _args, _ = _parser.parse_known_args()
-# CLI flag overrides config, but config default still applies when not passed
-_test_mode = _args.test or TEST_MODE
+
+# Runtime values — CLI args override config, config is the fallback
+_test_mode      = _args.test or TEST_MODE
+_deadband_m     = _args.deadband       if _args.deadband       is not None else CONTROL_DEADBAND_M
+_surface_delay  = _args.surface_delay  if _args.surface_delay  is not None else TEST_SURFACE_DELAY_S
+_surface_extend = _args.surface_extend if _args.surface_extend is not None else TEST_SURFACE_EXTEND_S
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BIAS_PATH = os.path.join(BASE_DIR, BIAS_FILE)
@@ -99,9 +106,9 @@ def holdDepthAndLog(targetM, mission_start):
             moveToDepth(targetM)
             continue
 
-        if diff < -CONTROL_DEADBAND_M:
+        if diff < -_deadband_m:
             actuator.retractActuator()
-        elif diff > CONTROL_DEADBAND_M:
+        elif diff > _deadband_m:
             actuator.extendActuator()
         else:
             actuator.stopActuator()
@@ -198,6 +205,9 @@ def main():
         os.remove(DATA_PATH)
 
     actuator.setupActuator()
+    if _args.duty is not None:
+        actuator.setDutyCycle(_args.duty)
+    print(f"Deadband: {_deadband_m:.3f} m  |  Test mode: {_test_mode}")
     mission_start = time.time()
     all_packets = []
 
@@ -208,11 +218,11 @@ def main():
     actuator.stopActuator()
 
     if _test_mode:
-        print(f"\nTEST MODE: waiting {TEST_SURFACE_DELAY_S}s then surfacing for manual retrieval...")
-        time.sleep(TEST_SURFACE_DELAY_S)
-        print(f"Surfacing — extending for {TEST_SURFACE_EXTEND_S}s...")
+        print(f"\nTEST MODE: waiting {_surface_delay:.0f}s then surfacing for manual retrieval...")
+        time.sleep(_surface_delay)
+        print(f"Surfacing — extending for {_surface_extend:.0f}s...")
         actuator.extendActuator()
-        time.sleep(TEST_SURFACE_EXTEND_S)
+        time.sleep(_surface_extend)
         actuator.stopActuator()
         print("Surfaced. Waiting for retrieval.")
     else:
