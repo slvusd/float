@@ -120,24 +120,60 @@ def executeProfile(number, mission_start):
     return packets
 
 
-def transmitData(packets):
-    print("\n--- Transmitting data ---")
-    for p in packets:
-        print(" ", p)
+def transmitData():
+    """Transmit data.csv to the controller, retrying until successful.
 
+    The float is likely underwater with no WiFi when this starts — that is
+    expected and fine.  Each attempt uses a 5-second timeout so it fails fast
+    instead of hanging.  Once the ROV brings the float above water, WiFi
+    reconnects and the next retry succeeds.
+
+    Schedule:
+      - Every 10 seconds until the first 200/204 response.
+      - Every 30 seconds after that, indefinitely.
+
+    Sending duplicates is harmless — the controller just overwrites the file
+    each time, which is exactly what we want for debugging confidence.
+    """
     if not os.path.exists(DATA_PATH):
-        print("No data file to transmit.")
+        print("No data file found — nothing to transmit.")
         return
 
-    try:
-        import requests
-        url = f"http://{CONTROLLER_IP}:{CONTROLLER_PORT}/receive"
-        with open(DATA_PATH, 'rb') as f:
-            r = requests.post(url, data=f,
-                              headers={'Content-Type': 'text/csv'}, timeout=10)
-        print(f"Transmitted to controller: {r.status_code} {r.text}")
-    except Exception as e:
-        print(f"Could not reach controller ({CONTROLLER_IP}:{CONTROLLER_PORT}): {e}")
+    import requests
+
+    # Print all logged packets to stdout for local record
+    print("\n--- Logged packets ---")
+    with open(DATA_PATH) as f:
+        for row in csv.DictReader(f):
+            print(" ", row.get('packet', ''))
+
+    url = f"http://{CONTROLLER_IP}:{CONTROLLER_PORT}/receive"
+    print(f"\n--- Transmission loop → {url} ---")
+    print("Retrying every 10s until first success, then every 30s. Ctrl+C to stop.\n")
+
+    first_success = False
+    attempt = 0
+
+    while True:
+        attempt += 1
+        try:
+            with open(DATA_PATH, 'rb') as f:
+                r = requests.post(url, data=f,
+                                  headers={'Content-Type': 'text/csv'}, timeout=5)
+            if r.status_code in (200, 204):
+                if not first_success:
+                    print(f"Attempt {attempt}: SUCCESS ({r.status_code}) — "
+                          f"controller confirmed receipt. Switching to 30s heartbeat.")
+                    first_success = True
+                else:
+                    print(f"Attempt {attempt}: heartbeat confirmed ({r.status_code})")
+            else:
+                print(f"Attempt {attempt}: unexpected status {r.status_code}")
+        except Exception as e:
+            print(f"Attempt {attempt}: no link ({type(e).__name__}) — "
+                  f"still underwater? retrying in 10s")
+
+        time.sleep(30 if first_success else 10)
 
 
 def main():
@@ -159,15 +195,12 @@ def main():
     for i in range(NUM_PROFILES):
         all_packets.extend(executeProfile(i + 1, mission_start))
 
-    print("\nProfiles complete. Holding for ROV recovery (Ctrl+C to transmit data)...")
+    print("\nProfiles complete. Actuator stopped. Waiting for ROV recovery...")
     actuator.stopActuator()
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
 
-    transmitData(all_packets)
+    # Immediately begin transmission loop — will keep retrying until the float
+    # is above water and WiFi connects, then continues as a 30s heartbeat.
+    transmitData()
 
 
 if __name__ == "__main__":

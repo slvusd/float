@@ -21,7 +21,7 @@ Surfacing on its own is a **5-point penalty** — the float must wait to be reco
 
 ### Data Packet Format
 
-One packet every 5 seconds, continuously throughout the dive:
+One packet every 5 seconds throughout the dive:
 ```
 RN08  HH:MM:SS  XXXX.X kPa  X.XX meters
 ```
@@ -38,28 +38,80 @@ Fields: team number · local time · pressure in kPa · depth in meters.
 
 ![Example output](example_plot.jpg)
 
-### After the Dive
-Float holds position passively. The ROV physically recovers it and brings it to the surface.
-Data is **downloaded on the pool deck** via the REST API — not transmitted during the dive.
+---
+
+## Network Architecture
+
+There are two computers involved on competition day:
+
+```
+[Shore laptop / ROV controller]          [Float — inside the float]
+  192.168.3.46  port 5001                  192.168.3.120  port 5000
+  controller.py                            server.py + depthadjust.py
+
+  Web UI at http://192.168.3.46:5001  ←→  REST API at http://192.168.3.120:5000
+  Proxy:  /float/<endpoint>          ────→ forwards to float
+  POST /receive  ←────────────────────────  transmitData() after mission
+  POST /fetch    ──────────────────────────→ pulls data.csv on demand
+```
+
+**Both machines need to be on the same WiFi network** (192.168.3.x).
+During the dive the float is underwater and has no WiFi — that is expected and fine.
+
+---
+
+## How Data Gets to the Controller
+
+This is the most important thing to understand about the system.
+
+### During the dive
+The float logs packets to `data.csv` continuously throughout the mission.
+It cannot transmit yet — it is underwater and WiFi does not reach.
+
+### After profiles complete
+The float stops its actuator and immediately begins a **transmission retry loop**:
+
+1. Every **10 seconds**, it tries to POST `data.csv` to the controller.
+2. Each attempt has a **5-second timeout** so it fails fast without hanging.
+3. The loop prints `no link (ConnectionError) — still underwater?` on every failure — **this is normal and expected while the float is underwater**.
+4. When the ROV retrieves the float and brings it to the surface, WiFi reconnects automatically.
+5. The very next retry (within 10 seconds) succeeds with `SUCCESS (200)`.
+6. The loop then switches to a **30-second heartbeat** — it keeps resending every 30 seconds as long as the float is powered.
+
+**Why keep sending after success?** Debugging confidence. If you don't see data on the controller, you know exactly whether the float tried to send, whether WiFi connected, and whether the controller received it — without guessing.
+
+**Why is sending duplicates okay?** The controller's `/receive` endpoint just overwrites `received_data.csv` each time. Identical data in, identical data out — no harm done.
+
+### Backup: fetch from controller
+If for any reason the float's push fails (wrong IP, network blip), a team member can click **"Fetch CSV from float"** on the controller UI. This makes the controller reach out and pull the data directly from the float.
 
 ---
 
 ## Pre-Deployment Checklist
 
 ```
-□ 1. Run test_extend.py  — piston fully extended (maximum buoyancy)
-□ 2. Open browser → http://<pi-ip>:5000
-□ 3. Click "Calibrate bias"  — float must be at the surface in air
-□ 4. Confirm bias reads ≈ –0.09 to –0.12 m (air reading is expected negative)
-□ 5. Place float in water — should float with some freeboard
-□ 6. Click "Start Mission"
-□ 7. Watch packets_logged increment on status page
-□ 8. After ROV recovery: open browser, click "Download CSV" and visit /plot
+□ 1.  git pull on float Pi, sudo systemctl restart float
+□ 2.  git pull on controller Pi, sudo systemctl restart float-controller
+□ 3.  Open browser → http://192.168.3.46:5001  (controller UI)
+□ 4.  Confirm float shows "reachable" in controller UI
+□ 5.  Run test_extend.py on float — piston must extend (go out)
+□ 6.  On controller UI (or float UI): click "Calibrate bias"
+       Float must be at the surface in air. Expect bias ≈ –0.09 to –0.12 m.
+□ 7.  Place float in water — should float with some freeboard
+□ 8.  Click "Start Mission" — watch packets_logged increment
+□ 9.  Float runs both profiles autonomously (~8–10 minutes)
+□ 10. Float stops actuator and begins transmission retry loop (normal to see failures)
+□ 11. ROV retrieves float, brings to surface
+□ 12. Within 10 seconds: controller shows "SUCCESS" in float logs
+□ 13. Click "Plot" on controller UI — verify two U-shapes
+□ 14. Click "Download CSV" — save for judges
 ```
 
 ---
 
 ## Setup
+
+### Float (192.168.3.120)
 
 ```bash
 git clone git@github.com:slvusd/float.git
@@ -67,86 +119,98 @@ cd float
 bash install.sh
 ```
 
-`install.sh` does everything in one step:
-1. Installs all packages via `apt` (no internet required after first run)
-2. Creates a Python venv
-3. Installs and enables the `float` systemd service — server starts on boot
+`install.sh` installs all packages via `apt`, creates a Python venv, and enables the `float` systemd service so the REST API starts on every boot.
 
 ```bash
-sudo systemctl status float        # check server
-sudo systemctl restart float       # restart after git pull
-sudo journalctl -u float -f        # live logs
+sudo systemctl status float          # check
+sudo systemctl restart float         # restart after git pull
+sudo journalctl -u float -f          # live logs
+```
+
+### Controller (192.168.3.46)
+
+```bash
+git clone git@github.com:slvusd/float.git
+cd float
+bash install_controller.sh
+```
+
+`install_controller.sh` does the same for the controller service on port 5001.
+
+```bash
+sudo systemctl status float-controller
+sudo systemctl restart float-controller
+sudo journalctl -u float-controller -f
 ```
 
 ---
 
-## Web UI
+## Web UIs
 
-Open `http://<pi-ip>:5000` in any browser on the same network.
-
-The dashboard shows live depth and pressure, mission status, packet count,
-action buttons (calibrate, start, extend, retract, stop), CSV download,
-and the depth plot from the most recent run.
+| URL | What it is |
+|-----|-----------|
+| `http://192.168.3.46:5001` | **Controller UI** — use this on competition day |
+| `http://192.168.3.46:5001/float/` | Float UI proxied through controller |
+| `http://192.168.3.120:5000` | Float UI direct (same network only) |
 
 ---
 
-## REST API
-
-All endpoints return JSON unless noted.
+## REST API — Float (port 5000)
 
 ### Actuator
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/extend?duration=20` | Extend actuator N seconds (default 20) |
-| `POST` | `/retract?duration=20` | Retract actuator N seconds (default 20) |
+| `POST` | `/extend?duration=20` | Extend actuator N seconds |
+| `POST` | `/retract?duration=20` | Retract actuator N seconds |
 | `POST` | `/stop` | Stop actuator immediately |
 
 ### Depth Sensor
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/depth` | Raw depth, bias-corrected depth, and pressure in kPa |
+| `GET` | `/depth` | Raw depth, bias-corrected depth, pressure in kPa |
 
 ### Bias
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/bias` | Return current bias (meters) |
 | `GET` | `/bias?value=-0.0983` | Set bias to value |
-| `POST` | `/bias` body `{"value": -0.0983}` | Set bias (programmatic) |
-| `POST` | `/calibrate` | Auto-calibrate: 10 readings at surface → stores bias |
+| `POST` | `/calibrate` | Auto-calibrate: 10 readings at surface |
 
 Bias is persisted to `bias.json` and survives reboots.
-`depthadjust.py` reads it automatically on startup — no need to recalibrate between power cycles.
 
 ### Mission
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/start` | Run `depthadjust.py` as a subprocess |
-| `GET` | `/status` | Mission running, bias value, packets logged so far |
-
-### Data
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+| `POST` | `/start` | Run `depthadjust.py` as subprocess |
+| `GET` | `/status` | Mission running, bias, packets logged |
 | `GET` | `/data` | Download `data.csv` |
-| `GET` | `/plot` | Download depth-vs-time JPG plot |
+| `GET` | `/plot` | Download depth-vs-time JPG |
+
+---
+
+## REST API — Controller (port 5001)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/` | Controller web UI |
+| `GET/POST` | `/float/<path>` | Proxy — forwards to float |
+| `POST` | `/receive` | Float pushes CSV here after mission |
+| `POST` | `/fetch` | Controller pulls CSV from float on demand |
+| `GET` | `/data` | Download received CSV |
+| `GET` | `/plot` | Generate and download JPG plot |
 
 ---
 
 ## Test Scripts
 
-Run these **before** deploying. Stop the server first (`sudo systemctl stop float`) if GPIO conflicts occur.
+Run these **before** deploying. Stop the float service first if needed:
+`sudo systemctl stop float`
 
 | Script | Command | What it checks |
 |--------|---------|----------------|
-| Piston position | `python test_extend.py` | Extends 10 s at full speed — piston must go **out** (not in) |
-| Actuator both ways | `python test_actuator.py [--duty 50] [--duration 8]` | Extend then retract; optional PWM speed |
-| Depth sensor | `python test_depth.py [--bias -98.3]` | Continuous depth in mm; should read ≈ 0 in air with correct bias |
-
-**Direction check:** if `test_extend.py` retracts instead of extends, swap `ACTUATOR_PIN_NEGATIVE_BCM` and `ACTUATOR_PIN_POSITIVE_BCM` in `config.py`.
+| Piston position | `python test_extend.py` | Piston must go **out** — if it retracts, swap pins in `config.py` |
+| Actuator both ways | `python test_actuator.py [--duty 50] [--duration 8]` | Extend then retract, optional PWM |
+| Depth sensor | `python test_depth.py [--bias -98.3]` | Continuous mm readings; ≈ 0 mm in air with correct bias |
 
 ---
 
@@ -166,15 +230,18 @@ Run these **before** deploying. Stop the server first (`sudo systemctl stop floa
 
 | File | Purpose |
 |------|---------|
-| `server.py` | Flask REST API + web UI |
-| `depthadjust.py` | Mission script — run directly or via `/start` |
+| `server.py` | Float REST API + web UI (port 5000) |
+| `controller.py` | Controller proxy + data receiver (port 5001) |
+| `depthadjust.py` | Mission script — profiles, logging, transmission retry loop |
 | `depthdetect.py` | MS5837 sensor wrapper |
 | `actuator.py` | H-bridge / actuator control |
-| `config.py` | All pin assignments, mission parameters, file paths |
+| `config.py` | Pin assignments, mission params, network IPs/ports |
 | `ms5837/` | Vendored Blue Robotics MS5837 library |
-| `float.service` | systemd service template (paths filled by `install.sh`) |
-| `install.sh` | Full setup: apt packages, venv, systemd service |
-| `requirements.txt` | Package list (all via apt) |
+| `float.service` | systemd template for float |
+| `controller.service` | systemd template for controller |
+| `install.sh` | Float setup: apt, venv, systemd |
+| `install_controller.sh` | Controller setup: apt, venv, systemd |
 | `example_plot.jpg` | Example mission output plot |
-| `bias.json` | Persisted depth bias (created at runtime) |
-| `data.csv` | Mission data log (created at runtime, overwritten each run) |
+| `bias.json` | Persisted depth bias (runtime) |
+| `data.csv` | Mission data log (runtime, overwritten each run) |
+| `received_data.csv` | Data received by controller (runtime) |
