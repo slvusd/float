@@ -1,10 +1,12 @@
 # GPIO pin assignments (BCM numbering)
 ACTUATOR_PIN_NEGATIVE_BCM   = 23
 ACTUATOR_PIN_POSITIVE_BCM   = 24
+ACTUATOR_PIN_ENABLE_BCM     = 27   # H-bridge enable pin
 
 # GPIO pin assignments (BOARD numbering)
 ACTUATOR_PIN_NEGATIVE_BOARD = 16
 ACTUATOR_PIN_POSITIVE_BOARD = 18
+ACTUATOR_PIN_ENABLE_BOARD   = 13   # H-bridge enable pin
 
 # Depth sensor — "02BA" for Bar02, "30BA" for Bar30
 SENSOR_MODEL   = "02BA"

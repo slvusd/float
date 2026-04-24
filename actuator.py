@@ -1,50 +1,53 @@
 import RPi.GPIO as GPIO
 import time
-from config import (ACTUATOR_PIN_NEGATIVE_BCM, ACTUATOR_PIN_POSITIVE_BCM,
-                    ACTUATOR_PIN_NEGATIVE_BOARD, ACTUATOR_PIN_POSITIVE_BOARD)
+from config import (ACTUATOR_PIN_NEGATIVE_BCM, ACTUATOR_PIN_POSITIVE_BCM, ACTUATOR_PIN_ENABLE_BCM,
+                    ACTUATOR_PIN_NEGATIVE_BOARD, ACTUATOR_PIN_POSITIVE_BOARD, ACTUATOR_PIN_ENABLE_BOARD)
 
 def setupActuator():
     mode = GPIO.getmode()
-    if (mode == GPIO.BCM):
-        GPIO.setup((ACTUATOR_PIN_NEGATIVE_BCM, ACTUATOR_PIN_POSITIVE_BCM), GPIO.OUT)
-    if (mode == GPIO.BOARD):
-        GPIO.setup((ACTUATOR_PIN_NEGATIVE_BOARD, ACTUATOR_PIN_POSITIVE_BOARD), GPIO.OUT)
-    if (mode == None):
+    if mode == GPIO.BCM:
+        GPIO.setup((ACTUATOR_PIN_NEGATIVE_BCM, ACTUATOR_PIN_POSITIVE_BCM, ACTUATOR_PIN_ENABLE_BCM), GPIO.OUT)
+        GPIO.output(ACTUATOR_PIN_ENABLE_BCM, GPIO.HIGH)
+    elif mode == GPIO.BOARD:
+        GPIO.setup((ACTUATOR_PIN_NEGATIVE_BOARD, ACTUATOR_PIN_POSITIVE_BOARD, ACTUATOR_PIN_ENABLE_BOARD), GPIO.OUT)
+        GPIO.output(ACTUATOR_PIN_ENABLE_BOARD, GPIO.HIGH)
+    else:
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup((ACTUATOR_PIN_NEGATIVE_BCM, ACTUATOR_PIN_POSITIVE_BCM), GPIO.OUT)
+        GPIO.setup((ACTUATOR_PIN_NEGATIVE_BCM, ACTUATOR_PIN_POSITIVE_BCM, ACTUATOR_PIN_ENABLE_BCM), GPIO.OUT)
+        GPIO.output(ACTUATOR_PIN_ENABLE_BCM, GPIO.HIGH)
 
 def retractActuator():
     mode = GPIO.getmode()
-    if (mode == GPIO.BCM):
+    if mode == GPIO.BCM:
         GPIO.output(ACTUATOR_PIN_NEGATIVE_BCM, GPIO.HIGH)
         GPIO.output(ACTUATOR_PIN_POSITIVE_BCM, GPIO.LOW)
-    if (mode == GPIO.BOARD):
+    elif mode == GPIO.BOARD:
         GPIO.output(ACTUATOR_PIN_NEGATIVE_BOARD, GPIO.HIGH)
         GPIO.output(ACTUATOR_PIN_POSITIVE_BOARD, GPIO.LOW)
-    if (mode == None):
-         print("GPIO is not setup when retracting actuator")
+    else:
+        print("GPIO is not setup when retracting actuator")
 
 def extendActuator():
     mode = GPIO.getmode()
-    if (mode == GPIO.BCM):
+    if mode == GPIO.BCM:
         GPIO.output(ACTUATOR_PIN_NEGATIVE_BCM, GPIO.LOW)
         GPIO.output(ACTUATOR_PIN_POSITIVE_BCM, GPIO.HIGH)
-    if (mode == GPIO.BOARD):
+    elif mode == GPIO.BOARD:
         GPIO.output(ACTUATOR_PIN_NEGATIVE_BOARD, GPIO.LOW)
         GPIO.output(ACTUATOR_PIN_POSITIVE_BOARD, GPIO.HIGH)
-    if (mode == None):
-         print("GPIO is not setup when extending actuator")
+    else:
+        print("GPIO is not setup when extending actuator")
 
 def stopActuator():
     mode = GPIO.getmode()
-    if (mode == GPIO.BCM):
+    if mode == GPIO.BCM:
         GPIO.output(ACTUATOR_PIN_NEGATIVE_BCM, GPIO.HIGH)
         GPIO.output(ACTUATOR_PIN_POSITIVE_BCM, GPIO.HIGH)
-    if (mode == GPIO.BOARD):
+    elif mode == GPIO.BOARD:
         GPIO.output(ACTUATOR_PIN_NEGATIVE_BOARD, GPIO.HIGH)
         GPIO.output(ACTUATOR_PIN_POSITIVE_BOARD, GPIO.HIGH)
-    if (mode == None):
-         print("GPIO is not setup when stopping actuator")
+    else:
+        print("GPIO is not setup when stopping actuator")
 
 
 #setupActuator()
