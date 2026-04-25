@@ -626,6 +626,18 @@ def tuning_page():
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Motor</td>  <td id="l-actuator" style="font-weight:600">—</td></tr>
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Packets</td><td id="l-packets"  style="font-weight:600">—</td></tr>
         </table>
+        <div id="l-syringe-section" style="display:none;margin-top:.6rem;min-width:180px">
+          <div style="font-size:.75rem;color:#888;margin-bottom:.2rem">
+            Syringe &nbsp;<b id="l-syringe-lbl"></b>
+          </div>
+          <div style="position:relative;height:10px;background:#e0e0e0;border-radius:5px;overflow:hidden">
+            <div id="l-syringe-fill" style="position:absolute;left:0;top:0;height:100%;width:50%;
+                 border-radius:5px;transition:width .5s ease,background .3s ease"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.6rem;color:#aaa;margin-top:.1rem">
+            <span>empty ↑</span><span>neutral</span><span>full ↓</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -735,6 +747,16 @@ function updateLive() {{
     act.textContent = astr;
     act.style.color = astr.includes('retract') ? '#c0392b' :
                       astr.includes('extend')  ? '#27ae60' : '#555';
+    if (d.syringe_pct != null) {{
+      const sp = +d.syringe_pct;
+      const ss = document.getElementById('l-syringe-section');
+      if (ss) ss.style.display = '';
+      document.getElementById('l-syringe-fill').style.width      = sp + '%';
+      document.getElementById('l-syringe-fill').style.background =
+        sp > 60 ? '#c0392b' : sp < 40 ? '#27ae60' : '#e8a000';
+      document.getElementById('l-syringe-lbl').textContent =
+        sp.toFixed(0) + '%  ' + (sp > 60 ? '(heavy ↓)' : sp < 40 ? '(light ↑)' : '(neutral)');
+    }}
     if (d.depth_m != null) {{
       const m = document.getElementById('g-float');
       const markerY = Math.max(2, Math.min(_GH - 12, _d2y(+d.depth_m) - 5));

@@ -83,7 +83,7 @@ if _sim_mode:
         rate = terminal descent speed at full syringe deflection (maps to sim_rate slider).
         """
         _DRAG        = 0.5    # velocity damping 1/s
-        _STROKE_RATE = 0.20   # syringe units/s at 100 % duty — full ±1 stroke in 5 s
+        _STROKE_RATE = 0.18   # syringe units/s at 100% duty — full 2-unit stroke in ~14 s at 80%
         _NATURAL     = -0.006 # m/s²: slight upward bias (float prefers to surface)
 
         def __init__(self, rate):
@@ -211,8 +211,12 @@ def _live_update(depth_m, actuator):
     _prev_live_depth = depth_m
     _live_t = now
     elapsed = round(now - _mission_start_t, 1) if _mission_start_t else 0.0
-    _write_status({'depth_m': round(depth_m, 3), 'elapsed_s': elapsed,
-                   'actuator': actuator, 'velocity_ms': velocity})
+    update = {'depth_m': round(depth_m, 3), 'elapsed_s': elapsed,
+              'actuator': actuator, 'velocity_ms': velocity}
+    if _sim_mode:
+        # syringe_pct: 0 = extended/empty/light (rising), 100 = retracted/full/heavy (sinking)
+        update['syringe_pct'] = round((1 + _sim_sensor._syringe) / 2 * 100, 1)
+    _write_status(update)
 
 
 def _proportional_duty(dist_m):
@@ -303,6 +307,10 @@ def moveToDepth(targetM):
     velocity   = 0.0
     last_log   = prev_t - 2
 
+    # Velocity thresholds — scaled to approach zone so they make sense across sim rates
+    BRAKE_V = 0.025   # m/s: if approaching faster than this inside approach zone → brake
+    COAST_V = 0.005   # m/s: coast (motor off) once moving toward target at this speed
+
     while True:
         current, _ = readTrueDepthAndPressure()
         if current is None:
@@ -317,24 +325,33 @@ def moveToDepth(targetM):
             log.info(f"Reached target {targetM:.2f} m  (sensor {current:.3f} m)")
             return
 
-        # Estimate velocity every ~0.4 s (averaging reduces noise)
+        # Estimate velocity every ~0.4 s
         if prev_depth is None:
             prev_depth, prev_t = current, now
         elif (now - prev_t) >= 0.4:
             velocity   = (current - prev_depth) / (now - prev_t)
             prev_depth, prev_t = current, now
 
-        # Coast if already moving toward target — let buoyancy do the work.
-        # diff < 0: too shallow, need to sink → want positive velocity (↓)
-        # diff > 0: too deep,    need to rise  → want negative velocity (↑)
-        COAST_V = 0.008   # m/s — minimum "moving usefully" threshold
-        coasting = (diff < 0 and velocity >  COAST_V) or \
-                   (diff > 0 and velocity < -COAST_V)
+        in_approach  = abs(diff) <= _approach_zone
+        going_toward = (diff < 0 and velocity >  0) or (diff > 0 and velocity < 0)
 
-        if coasting:
+        if in_approach and going_toward and abs(velocity) > BRAKE_V:
+            # Too fast inside approach zone: run motor opposite to shed buoyancy
+            # (don't just slow the motor — actively counteract the committed syringe deflection)
+            brake_duty = max(_min_duty, _proportional_duty(diff) // 2)
+            actuator.setDutyCycle(brake_duty)
+            if diff < 0:   # sinking toward target → extend to add upward force
+                actuator.extendActuator()
+                _live_update(current, 'braking ↑')
+            else:          # rising toward target → retract to add downward force
+                actuator.retractActuator()
+                _live_update(current, 'braking ↓')
+        elif in_approach and going_toward and abs(velocity) > COAST_V:
+            # In approach zone at reasonable speed — coast, let momentum carry us
             actuator.stopActuator()
             _live_update(current, 'coasting')
         else:
+            # Outside approach zone, or not moving toward target yet — actuate
             duty = _proportional_duty(diff)
             actuator.setDutyCycle(duty)
             if diff < 0:
@@ -345,10 +362,15 @@ def moveToDepth(targetM):
                 _live_update(current, 'extending ↑')
 
         if now - last_log >= 2.0:
+            if in_approach and going_toward and abs(velocity) > BRAKE_V:
+                phase = '[braking]'
+            elif in_approach and going_toward:
+                phase = '[coasting]'
+            else:
+                phase = f'duty {_proportional_duty(diff)}%'
             direction = "sinking ↓" if diff < 0 else "rising ↑"
             log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m"
-                     f"  diff {diff:+.3f} m  vel {velocity:+.4f} m/s"
-                     + ("  [coasting]" if coasting else f"  duty {_proportional_duty(diff)}%"))
+                     f"  diff {diff:+.3f} m  vel {velocity:+.4f} m/s  {phase}")
             last_log = now
         time.sleep(0.1)
 

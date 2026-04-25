@@ -41,7 +41,7 @@ ACTUATOR_DUTY_CYCLE  = 80    # H-bridge PWM duty % (100 = full speed, ~80 recomm
 # Within APPROACH_ZONE_M of the target, duty ramps linearly from
 # ACTUATOR_DUTY_CYCLE down to MIN_DUTY_PCT. Never goes below 25% — below
 # that the motor may stall under water pressure.
-APPROACH_ZONE_M  = 0.50   # metres: start slowing this far from target
+APPROACH_ZONE_M  = 0.80   # metres: start braking/coasting this far from target
 MIN_DUTY_PCT     = 30     # minimum duty % when very close to target
 
 # Physical float dimensions for accurate competition depth targeting.
