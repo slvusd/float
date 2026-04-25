@@ -1008,5 +1008,5 @@ if not depth_sensor.initSensor():
 
 if __name__ == '__main__':
     import os as _os
-    _port = int(_os.environ.get('FLOAT_PORT', FLOAT_PORT))
+    _port = int(_os.environ.get('FLOAT_PORT', 5000))
     app.run(host='0.0.0.0', port=_port, debug=False)
