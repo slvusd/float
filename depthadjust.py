@@ -317,10 +317,11 @@ def moveToDepth(targetM):
     # the tolerance boundary — so the float is already slow when it arrives.
     # Trim is continuous (fires each loop while overspeed, stops immediately
     # when velocity drops to profile) so it cannot over-extend the syringe.
-    VMAX      = 0.05   # m/s — absolute speed cap during transit
-    VMIN      = 0.007  # m/s — trigger a new forward burst when below this
-    BURST_MAX = 1.0    # max seconds per forward burst — keep committed buoyancy small
-    OBSERVE_S = 2.0    # settle window after a burst; long enough to measure velocity
+    VMAX      = 0.04   # m/s hard cap — never exceed this
+    VMIN      = 0.010  # m/s — start a forward burst when below this
+    LOW_DUTY  = 35     # % — ALL forward actuation at this duty, no exceptions
+    BURST_MAX = 1.0    # max seconds per forward burst
+    OBSERVE_S = 2.0    # settle window after a burst
 
     while True:
         current, _ = readTrueDepthAndPressure()
@@ -346,12 +347,10 @@ def moveToDepth(targetM):
         v_toward    = velocity if diff < 0 else -velocity
         in_approach = abs(diff) <= _approach_zone
 
-        if in_approach and v_toward > 0.001:
+        if in_approach and v_toward > 0.005:
             # ── Approach zone: always oppose motion ───────────────────────────
-            # Committed buoyancy accelerates the float regardless of motor state.
-            # The ONLY way to prevent acceleration is to run the opposing motor
-            # continuously whenever the float is moving toward the target.
-            # Duty scales with velocity: gentle when slow, firmer when fast.
+            # Motor runs opposing direction every loop tick while moving toward
+            # target. Duty scales with velocity so it is gentle at low speed.
             if burst_start is not None: burst_start = None
             duty = max(_min_duty, min(_full_duty,
                        int(_min_duty + (_full_duty - _min_duty) * v_toward / VMAX)))
@@ -359,21 +358,19 @@ def moveToDepth(targetM):
             if diff < 0: actuator.extendActuator();  phase = f'brake ↑ {duty}%'
             else:        actuator.retractActuator(); phase = f'brake ↓ {duty}%'
 
-        elif in_approach and v_toward <= 0.001:
-            # Stopped or drifting back inside zone — tiny nudge toward target
+        elif in_approach:
+            # Stopped or very slow inside zone — nudge at LOW_DUTY only
             if burst_start is not None: burst_start = None
-            actuator.setDutyCycle(_min_duty)
+            actuator.setDutyCycle(LOW_DUTY)
             if diff < 0: actuator.retractActuator(); phase = 'nudge ↓'
             else:        actuator.extendActuator();  phase = 'nudge ↑'
 
         elif v_toward > VMAX:
-            # ── Outside zone: hard velocity cap ──────────────────────────────
-            excess    = min(1.0, (v_toward - VMAX) / VMAX)
-            trim_duty = int(_min_duty + (_full_duty - _min_duty) * max(0.3, excess))
+            # ── Outside zone: hard cap — trim gently at LOW_DUTY ─────────────
             if burst_start is not None: motor_end = now; burst_start = None
-            actuator.setDutyCycle(trim_duty)
-            if diff < 0: actuator.extendActuator();  phase = f'trim ↑ {trim_duty}%'
-            else:        actuator.retractActuator(); phase = f'trim ↓ {trim_duty}%'
+            actuator.setDutyCycle(LOW_DUTY)
+            if diff < 0: actuator.extendActuator();  phase = 'trim ↑'
+            else:        actuator.retractActuator(); phase = 'trim ↓'
 
         elif v_toward >= VMIN:
             # Coasting at adequate speed
@@ -381,7 +378,8 @@ def moveToDepth(targetM):
             actuator.stopActuator(); phase = 'coasting'
 
         elif burst_start is not None and (now - burst_start) < BURST_MAX:
-            actuator.setDutyCycle(_proportional_duty(diff))
+            # Forward burst — always LOW_DUTY, never a sudden high-speed kick
+            actuator.setDutyCycle(LOW_DUTY)
             if diff < 0: actuator.retractActuator(); phase = f'burst ↓ {now-burst_start:.1f}s'
             else:        actuator.extendActuator();  phase = f'burst ↑ {now-burst_start:.1f}s'
 
@@ -393,8 +391,9 @@ def moveToDepth(targetM):
             actuator.stopActuator(); phase = f'observing {now-motor_end:.1f}s'
 
         else:
+            # Start new forward burst — LOW_DUTY only
             burst_start = now
-            actuator.setDutyCycle(_proportional_duty(diff))
+            actuator.setDutyCycle(LOW_DUTY)
             if diff < 0: actuator.retractActuator(); phase = 'burst ↓ start'
             else:        actuator.extendActuator();  phase = 'burst ↑ start'
 
