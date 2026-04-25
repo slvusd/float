@@ -6,29 +6,52 @@ set -e
 echo "=== RN08 Float — Mac Simulator Setup ==="
 echo
 
-# Require Python 3.9+
-PYTHON=$(command -v python3 || true)
+# Prefer a stable Python (3.13 → 3.12 → 3.11 → 3.10 → generic python3).
+# Python 3.14 is pre-release and ensurepip may not work yet.
+PYTHON=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+  if command -v "$candidate" &>/dev/null; then
+    ver=$($candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    major=${ver%%.*}; minor=${ver##*.}
+    if [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; then
+      PYTHON=$(command -v "$candidate")
+      PY_VER="$ver"
+      break
+    fi
+  fi
+done
+
 if [ -z "$PYTHON" ]; then
-  echo "ERROR: python3 not found."
-  echo "Install it with:  brew install python3"
+  echo "ERROR: Python 3.10+ not found."
+  echo "Install it with:  brew install python@3.13"
   exit 1
 fi
-PY_VER=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "Python: $PYTHON  ($PY_VER)"
 
-# Create venv
+# Warn but continue on pre-release Python
+PY_MINOR=${PY_VER##*.}
+if [ "$PY_MINOR" -gt 13 ]; then
+  echo "NOTE: Python $PY_VER is pre-release — using it, but 3.13 is recommended."
+  echo "      brew install python@3.13   (if you hit issues)"
+fi
+
+# Create venv — fall back to --without-pip + bootstrap for pre-release Pythons
 if [ ! -d ".venv" ]; then
   echo "Creating virtual environment..."
-  $PYTHON -m venv .venv
+  if ! "$PYTHON" -m venv .venv 2>/dev/null; then
+    echo "  (ensurepip failed — creating venv without pip, then bootstrapping)"
+    "$PYTHON" -m venv .venv --without-pip
+    echo "  Downloading get-pip.py..."
+    curl -sS https://bootstrap.pypa.io/get-pip.py | .venv/bin/python
+  fi
 fi
 
 source .venv/bin/activate
-echo "Virtual environment: $(which python)"
+echo "Virtual environment: $(which python)  ($(python --version))"
 echo
 
 echo "Installing dependencies..."
 pip install --quiet --upgrade pip
-# smbus2 is pure-Python; its import works on Mac even though I2C calls will fail.
 pip install --quiet flask matplotlib numpy requests smbus2
 echo "Done."
 
