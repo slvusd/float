@@ -308,13 +308,19 @@ def moveToDepth(targetM):
     prev_t      = time.time()
     velocity    = 0.0
     last_log    = prev_t - 2
-    burst_start = None   # when the current burst began (None = motor off)
-    burst_end   = None   # when the last burst ended
+    burst_start = None
+    back_start  = None
+    motor_end   = None
 
-    BURST_MAX = 2.0   # max seconds per actuation burst
-    OBSERVE_S = 1.5   # min seconds to observe after each burst
-    COAST_V   = 0.005 # m/s: already drifting toward target — don't interrupt
-    BRAKE_V   = 0.025 # m/s: in approach zone, too fast — actively brake
+    # Velocity governor — keeps the float in a controlled speed band.
+    # As soon as v_toward > VMAX the motor immediately trims back; if v drops
+    # below VMIN the motor gives another short forward burst.  This prevents
+    # committed buoyancy from running away.
+    VMAX      = 0.05   # m/s hard cap toward target — trim back immediately
+    VMIN      = 0.007  # m/s floor — start a new burst when below this
+    BACK_DUR  = 1.0    # seconds to run reverse trim when cap is hit
+    BURST_MAX = 2.0    # max seconds per forward burst
+    OBSERVE_S = 1.2    # observe after any motor action before deciding again
 
     while True:
         current, _ = readTrueDepthAndPressure()
@@ -330,49 +336,59 @@ def moveToDepth(targetM):
             log.info(f"Reached target {targetM:.2f} m  (sensor {current:.3f} m)")
             return
 
-        # Velocity estimate — updated every ~0.4 s to reduce noise
+        # Velocity estimate updated every ~0.4 s
         if prev_depth is None:
             prev_depth, prev_t = current, now
         elif (now - prev_t) >= 0.4:
             velocity   = (current - prev_depth) / (now - prev_t)
             prev_depth, prev_t = current, now
 
-        going_toward = (diff < 0 and velocity >  0) or (diff > 0 and velocity < 0)
-        in_approach  = abs(diff) <= _approach_zone
+        # v_toward: positive = moving toward target
+        v_toward    = velocity if diff < 0 else -velocity
+        in_approach = abs(diff) <= _approach_zone
+        # Tighten the cap near target so we arrive gently
+        vmax = VMAX / 3.0 if in_approach else VMAX
 
-        # 1. Brake: overspeed inside approach zone
-        if in_approach and going_toward and abs(velocity) > BRAKE_V:
-            if burst_start is not None:
-                burst_end = now; burst_start = None
-            actuator.setDutyCycle(max(_min_duty, _proportional_duty(diff) // 2))
-            if diff < 0: actuator.extendActuator();  phase = 'braking ↑'
-            else:        actuator.retractActuator(); phase = 'braking ↓'
+        # 1. Cap exceeded: immediate reverse trim at minimum duty
+        if v_toward > vmax:
+            if back_start is None: back_start = now
+            burst_start = None
+            actuator.setDutyCycle(_min_duty)
+            if diff < 0: actuator.extendActuator();  phase = 'trim ↑'
+            else:        actuator.retractActuator(); phase = 'trim ↓'
 
-        # 2. Coast: already drifting toward target at useful speed
-        elif going_toward and abs(velocity) > COAST_V:
-            if burst_start is not None:
-                burst_end = now; burst_start = None
-            actuator.stopActuator()
-            phase = 'coasting'
+        # 2. Continue reverse trim
+        elif back_start is not None and (now - back_start) < BACK_DUR:
+            actuator.setDutyCycle(_min_duty)
+            if diff < 0: actuator.extendActuator();  phase = f'trim ↑ {now-back_start:.1f}s'
+            else:        actuator.retractActuator(); phase = f'trim ↓ {now-back_start:.1f}s'
 
-        # 3. Continue active burst (up to BURST_MAX seconds)
+        # 3. Trim ended → observe
+        elif back_start is not None:
+            motor_end = now; back_start = None
+            actuator.stopActuator(); phase = 'observing'
+
+        # 4. Observe window — let velocity settle, don't rush the next decision
+        elif motor_end is not None and (now - motor_end) < OBSERVE_S:
+            actuator.stopActuator(); phase = f'observing {now-motor_end:.1f}s'
+
+        # 5. Moving toward target adequately — coast
+        elif v_toward >= VMIN:
+            if burst_start is not None: burst_start = None
+            actuator.stopActuator(); phase = 'coasting'
+
+        # 6. Continue forward burst
         elif burst_start is not None and (now - burst_start) < BURST_MAX:
             actuator.setDutyCycle(_proportional_duty(diff))
             if diff < 0: actuator.retractActuator(); phase = f'burst ↓ {now-burst_start:.1f}s'
             else:        actuator.extendActuator();  phase = f'burst ↑ {now-burst_start:.1f}s'
 
-        # 4. Burst time up — stop motor and observe
+        # 7. Burst expired → observe
         elif burst_start is not None:
-            burst_end = now; burst_start = None
-            actuator.stopActuator()
-            phase = 'observing'
+            motor_end = now; burst_start = None
+            actuator.stopActuator(); phase = 'observing'
 
-        # 5. Still in observe window — wait for velocity to settle
-        elif burst_end is not None and (now - burst_end) < OBSERVE_S:
-            actuator.stopActuator()
-            phase = f'observing {now-burst_end:.1f}s'
-
-        # 6. Need more — start a new burst
+        # 8. Start new forward burst
         else:
             burst_start = now
             actuator.setDutyCycle(_proportional_duty(diff))
