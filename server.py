@@ -891,8 +891,8 @@ function updateLive() {{
     const act = document.getElementById('l-actuator');
     const astr = d.actuator || '—';
     act.textContent = astr;
-    act.style.color = astr.includes('retract') ? '#c0392b' :
-                      astr.includes('extend')  ? '#27ae60' : '#555';
+    act.style.color = astr.includes('↓') ? '#c0392b' :
+                      astr.includes('↑') ? '#27ae60' : '#555';
 
     if (d.syringe_pct != null) {{
       const sp = +d.syringe_pct;
@@ -910,8 +910,10 @@ function updateLive() {{
       const m = document.getElementById('g-float');
       const markerY = Math.max(2, Math.min(_GH - 12, _d2y(+d.depth_m) - 5));
       m.style.top        = markerY + 'px';
-      m.style.background = astr.includes('retract') ? '#c0392b' :
-                           astr.includes('extend')  ? '#27ae60' : '#0077b6';
+      const v = d.velocity_ms || 0;
+      m.style.background = v >  0.005 ? '#c0392b' :   // sinking
+                           v < -0.005 ? '#27ae60' :    // rising
+                           '#0077b6';                   // holding
     }}
 
     if (!d.mission_running && !d.profiles_complete) {{

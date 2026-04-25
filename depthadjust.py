@@ -91,7 +91,7 @@ if _sim_mode:
             self._buoy_gain = rate * self._DRAG - self._NATURAL
             self._depth    = 0.0
             self._velocity = 0.0
-            self._syringe  = 0.0   # +1 retracted/heavy, -1 extended/light
+            self._syringe  = -1.0  # start fully extended (empty) — maximum positive buoyancy
             self._dir      = 0     # +1 retract/sink, -1 extend/rise, 0 stop
             self._duty     = 1.0   # 0..1 fraction
             self._t        = time.time()
@@ -302,14 +302,17 @@ def archivePreviousRun():
 
 def moveToDepth(targetM):
     log.info(f"Moving to {targetM:.2f} m...")
-    prev_depth = None
-    prev_t     = time.time()
-    velocity   = 0.0
-    last_log   = prev_t - 2
+    prev_depth  = None
+    prev_t      = time.time()
+    velocity    = 0.0
+    last_log    = prev_t - 2
+    burst_start = None   # when the current burst began (None = motor off)
+    burst_end   = None   # when the last burst ended
 
-    # Velocity thresholds — scaled to approach zone so they make sense across sim rates
-    BRAKE_V = 0.025   # m/s: if approaching faster than this inside approach zone → brake
-    COAST_V = 0.005   # m/s: coast (motor off) once moving toward target at this speed
+    BURST_MAX = 2.0   # max seconds per actuation burst
+    OBSERVE_S = 1.5   # min seconds to observe after each burst
+    COAST_V   = 0.005 # m/s: already drifting toward target — don't interrupt
+    BRAKE_V   = 0.025 # m/s: in approach zone, too fast — actively brake
 
     while True:
         current, _ = readTrueDepthAndPressure()
@@ -325,52 +328,61 @@ def moveToDepth(targetM):
             log.info(f"Reached target {targetM:.2f} m  (sensor {current:.3f} m)")
             return
 
-        # Estimate velocity every ~0.4 s
+        # Velocity estimate — updated every ~0.4 s to reduce noise
         if prev_depth is None:
             prev_depth, prev_t = current, now
         elif (now - prev_t) >= 0.4:
             velocity   = (current - prev_depth) / (now - prev_t)
             prev_depth, prev_t = current, now
 
-        in_approach  = abs(diff) <= _approach_zone
         going_toward = (diff < 0 and velocity >  0) or (diff > 0 and velocity < 0)
+        in_approach  = abs(diff) <= _approach_zone
 
+        # 1. Brake: overspeed inside approach zone
         if in_approach and going_toward and abs(velocity) > BRAKE_V:
-            # Too fast inside approach zone: run motor opposite to shed buoyancy
-            # (don't just slow the motor — actively counteract the committed syringe deflection)
-            brake_duty = max(_min_duty, _proportional_duty(diff) // 2)
-            actuator.setDutyCycle(brake_duty)
-            if diff < 0:   # sinking toward target → extend to add upward force
-                actuator.extendActuator()
-                _live_update(current, 'braking ↑')
-            else:          # rising toward target → retract to add downward force
-                actuator.retractActuator()
-                _live_update(current, 'braking ↓')
-        elif in_approach and going_toward and abs(velocity) > COAST_V:
-            # In approach zone at reasonable speed — coast, let momentum carry us
+            if burst_start is not None:
+                burst_end = now; burst_start = None
+            actuator.setDutyCycle(max(_min_duty, _proportional_duty(diff) // 2))
+            if diff < 0: actuator.extendActuator();  phase = 'braking ↑'
+            else:        actuator.retractActuator(); phase = 'braking ↓'
+
+        # 2. Coast: already drifting toward target at useful speed
+        elif going_toward and abs(velocity) > COAST_V:
+            if burst_start is not None:
+                burst_end = now; burst_start = None
             actuator.stopActuator()
-            _live_update(current, 'coasting')
+            phase = 'coasting'
+
+        # 3. Continue active burst (up to BURST_MAX seconds)
+        elif burst_start is not None and (now - burst_start) < BURST_MAX:
+            actuator.setDutyCycle(_proportional_duty(diff))
+            if diff < 0: actuator.retractActuator(); phase = f'burst ↓ {now-burst_start:.1f}s'
+            else:        actuator.extendActuator();  phase = f'burst ↑ {now-burst_start:.1f}s'
+
+        # 4. Burst time up — stop motor and observe
+        elif burst_start is not None:
+            burst_end = now; burst_start = None
+            actuator.stopActuator()
+            phase = 'observing'
+
+        # 5. Still in observe window — wait for velocity to settle
+        elif burst_end is not None and (now - burst_end) < OBSERVE_S:
+            actuator.stopActuator()
+            phase = f'observing {now-burst_end:.1f}s'
+
+        # 6. Need more — start a new burst
         else:
-            # Outside approach zone, or not moving toward target yet — actuate
-            duty = _proportional_duty(diff)
-            actuator.setDutyCycle(duty)
-            if diff < 0:
-                actuator.retractActuator()
-                _live_update(current, 'retracting ↓')
-            else:
-                actuator.extendActuator()
-                _live_update(current, 'extending ↑')
+            burst_start = now
+            actuator.setDutyCycle(_proportional_duty(diff))
+            if diff < 0: actuator.retractActuator(); phase = 'burst ↓ start'
+            else:        actuator.extendActuator();  phase = 'burst ↑ start'
+
+        _live_update(current, phase)
 
         if now - last_log >= 2.0:
-            if in_approach and going_toward and abs(velocity) > BRAKE_V:
-                phase = '[braking]'
-            elif in_approach and going_toward:
-                phase = '[coasting]'
-            else:
-                phase = f'duty {_proportional_duty(diff)}%'
             direction = "sinking ↓" if diff < 0 else "rising ↑"
             log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m"
-                     f"  diff {diff:+.3f} m  vel {velocity:+.4f} m/s  {phase}")
+                     f"  diff {diff:+.3f} m  vel {velocity:+.4f} m/s  [{phase}]")
             last_log = now
         time.sleep(0.1)
 
