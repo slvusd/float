@@ -84,11 +84,13 @@ if _sim_mode:
         """
         _DRAG        = 0.5    # velocity damping 1/s
         _STROKE_RATE = 0.18   # syringe units/s at 100% duty — full 2-unit stroke in ~14 s at 80%
-        _NATURAL     = -0.006 # m/s²: slight upward bias (float prefers to surface)
+        _NATURAL     = -0.001 # m/s²: tiny upward bias so float always eventually surfaces
 
         def __init__(self, rate):
-            # buoy_gain chosen so terminal velocity at syringe=1 equals rate
-            self._buoy_gain = rate * self._DRAG - self._NATURAL
+            # Neutral buoyancy when syringe = -1.0 (fully extended / empty).
+            # buoyancy = (syringe + 1) * buoy_gain + NATURAL
+            # Terminal at full syringe (+1): 2*buoy_gain + NATURAL = rate * DRAG
+            self._buoy_gain = (rate * self._DRAG - self._NATURAL) / 2.0
             self._depth    = 0.0
             self._velocity = 0.0
             self._syringe  = -1.0  # start fully extended (empty) — maximum positive buoyancy
@@ -112,8 +114,8 @@ if _sim_mode:
             stroke        = self._dir * self._STROKE_RATE * self._duty
             self._syringe = max(-1.0, min(1.0, self._syringe + stroke * dt))
 
-            # Net vertical acceleration: buoyancy + natural drift − drag
-            buoyancy       = self._syringe * self._buoy_gain + self._NATURAL
+            # buoyancy = 0 when syringe = -1 (empty), max when syringe = +1 (full)
+            buoyancy       = (self._syringe + 1.0) * self._buoy_gain + self._NATURAL
             self._velocity += (buoyancy - self._DRAG * self._velocity) * dt
             self._depth    += self._velocity * dt
             self._depth     = max(-0.15, min(6.0, self._depth))
