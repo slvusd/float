@@ -602,14 +602,20 @@ def tuning_page():
     <h2>Live View</h2>
     <div style="display:flex;gap:1.5rem;align-items:flex-start">
       <div style="flex:0 0 auto;position:relative;height:280px;width:96px">
-        <div style="position:absolute;left:0;top:0;width:44px;height:280px;
-                    background:linear-gradient(180deg,#e8f6ff,#b8d8f0);
+        <div style="position:absolute;left:0;top:0;width:44px;height:280px;z-index:1;
+                    background:linear-gradient(180deg,#b8e0f7 0%,#1e6fa8 100%);
                     border:2px solid #8aabb8;border-radius:5px;overflow:hidden">
           <div id="g-surf-zone" style="position:absolute;width:100%;background:rgba(39,174,96,.22)"></div>
           <div id="g-bot-zone"  style="position:absolute;width:100%;background:rgba(192,57,43,.18)"></div>
-          <div id="g-float"     style="position:absolute;left:2px;width:36px;height:10px;
-                                       border-radius:3px;background:#0077b6;
-                                       transition:top .5s ease,background .3s ease"></div>
+        </div>
+        <div id="g-float" style="position:absolute;left:5px;width:34px;z-index:2;overflow:hidden;
+                                  border-radius:17px;
+                                  background:linear-gradient(to right,#455a64,#78909c,#546e7a);
+                                  box-shadow:inset 0 2px 3px rgba(255,255,255,.15),2px 3px 7px rgba(0,0,0,.45);
+                                  transition:top .5s ease,background .3s ease">
+          <div id="g-fill" style="position:absolute;bottom:0;left:0;right:0;height:0;
+                                   background:rgba(20,90,170,.5);border-radius:0 0 17px 17px;
+                                   transition:height .5s ease"></div>
         </div>
         <div style="position:absolute;left:50px;top:-6px;font-size:.65rem;color:#888">0 m</div>
         <div id="g-lbl-surf" style="position:absolute;left:50px;font-size:.65rem;color:#27ae60;font-weight:700;white-space:nowrap"></div>
@@ -626,18 +632,6 @@ def tuning_page():
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Motor</td>  <td id="l-actuator" style="font-weight:600">—</td></tr>
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Packets</td><td id="l-packets"  style="font-weight:600">—</td></tr>
         </table>
-        <div id="l-syringe-section" style="display:none;margin-top:.6rem;min-width:180px">
-          <div style="font-size:.75rem;color:#888;margin-bottom:.2rem">
-            Syringe &nbsp;<b id="l-syringe-lbl"></b>
-          </div>
-          <div style="position:relative;height:10px;background:#e0e0e0;border-radius:5px;overflow:hidden">
-            <div id="l-syringe-fill" style="position:absolute;left:0;top:0;height:100%;width:50%;
-                 border-radius:5px;transition:width .5s ease,background .3s ease"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:.6rem;color:#aaa;margin-top:.1rem">
-            <span>empty ↑</span><span>neutral</span><span>full ↓</span>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -672,6 +666,8 @@ function msg(t, err) {{
 
 const _GH = 280, _GM = 3.1;
 function _d2y(d) {{ return Math.max(0, Math.min(_GH, d / _GM * _GH)); }}
+const _FH = _GH * ({float_height} / _GM);
+const _FS = _GH * ({offset}       / _GM);
 
 function initGauge() {{
   const tb  = parseFloat(document.getElementById('target-bottom').value)  || {bot};
@@ -685,6 +681,8 @@ function initGauge() {{
   sz.style.top = _d2y(ts-tol)+'px'; sz.style.height = (_d2y(ts+tol)-_d2y(ts-tol))+'px';
   const sl = document.getElementById('g-lbl-surf');
   sl.style.top = (_d2y(ts)-7)+'px'; sl.textContent = ts.toFixed(1)+' m';
+  const m = document.getElementById('g-float');
+  if (m) m.style.height = Math.round(_GH * ({float_height} / _GM)) + 'px';
 }}
 
 function updateTargets() {{
@@ -747,24 +745,20 @@ function updateLive() {{
     act.textContent = astr;
     act.style.color = astr.includes('↓') ? '#c0392b' :
                       astr.includes('↑') ? '#27ae60' : '#555';
-    if (d.syringe_pct != null) {{
-      const sp = +d.syringe_pct;
-      const ss = document.getElementById('l-syringe-section');
-      if (ss) ss.style.display = '';
-      document.getElementById('l-syringe-fill').style.width      = sp + '%';
-      document.getElementById('l-syringe-fill').style.background =
-        sp > 60 ? '#c0392b' : sp < 40 ? '#27ae60' : '#e8a000';
-      document.getElementById('l-syringe-lbl').textContent =
-        sp.toFixed(0) + '%  ' + (sp > 60 ? '(heavy ↓)' : sp < 40 ? '(light ↑)' : '(neutral)');
-    }}
     if (d.depth_m != null) {{
       const m = document.getElementById('g-float');
-      const markerY = Math.max(2, Math.min(_GH - 12, _d2y(+d.depth_m) - 5));
-      m.style.top        = markerY + 'px';
-      const v = d.velocity_ms || 0;
-      m.style.background = v >  0.005 ? '#c0392b' :   // sinking
-                           v < -0.005 ? '#27ae60' :    // rising
-                           '#0077b6';                   // holding
+      if (m) {{
+        m.style.top = Math.round(_d2y(+d.depth_m) - (_FH - _FS)) + 'px';
+        const v = d.velocity_ms || 0;
+        m.style.background =
+          v >  0.005 ? 'linear-gradient(to right,#7b1a1a,#c0392b,#7b1a1a)' :
+          v < -0.005 ? 'linear-gradient(to right,#0d5c2c,#27ae60,#0d5c2c)' :
+                       'linear-gradient(to right,#455a64,#78909c,#546e7a)';
+      }}
+    }}
+    if (d.syringe_pct != null) {{
+      const fill = document.getElementById('g-fill');
+      if (fill) fill.style.height = (+d.syringe_pct).toFixed(0) + '%';
     }}
     if (!d.mission_running && !d.profiles_complete) {{
       if (_liveInterval) {{ clearInterval(_liveInterval); _liveInterval = null; }}
