@@ -44,16 +44,16 @@ _deadband_m     = _args.deadband        if _args.deadband        is not None els
 _surface_delay  = _args.surface_delay   if _args.surface_delay   is not None else TEST_SURFACE_DELAY_S
 _surface_extend = _args.surface_extend  if _args.surface_extend  is not None else TEST_SURFACE_EXTEND_S
 _sensor_offset  = _args.sensor_offset   if _args.sensor_offset   is not None else SENSOR_DEPTH_OFFSET_M
-_comp_bottom   = _args.target_bottom  if _args.target_bottom  is not None else TARGET_BOTTOM_M
-_comp_surface  = _args.target_surface if _args.target_surface is not None else TARGET_SURFACE_M
+_float_height   = _args.float_height    if _args.float_height    is not None else FLOAT_HEIGHT_M
+_full_duty      = _args.duty            if _args.duty            is not None else ACTUATOR_DUTY_CYCLE
+_approach_zone  = _args.approach_zone   if _args.approach_zone   is not None else APPROACH_ZONE_M
+_min_duty       = _args.min_duty        if _args.min_duty        is not None else MIN_DUTY_PCT
+_comp_bottom    = _args.target_bottom   if _args.target_bottom   is not None else TARGET_BOTTOM_M
+_comp_surface   = _args.target_surface  if _args.target_surface  is not None else TARGET_SURFACE_M
 # Descent: bottom of float at competition depth → sensor is sensor_offset above bottom
 _target_bottom  = _comp_bottom  - _sensor_offset
 # Ascent: top of float at competition surface depth → sensor is (height - offset) below top
 _target_surface = _comp_surface + _float_height - _sensor_offset
-_full_duty      = _args.duty            if _args.duty            is not None else ACTUATOR_DUTY_CYCLE
-_approach_zone  = _args.approach_zone   if _args.approach_zone   is not None else APPROACH_ZONE_M
-_min_duty       = _args.min_duty        if _args.min_duty        is not None else MIN_DUTY_PCT
-_float_height   = _args.float_height    if _args.float_height    is not None else FLOAT_HEIGHT_M
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
