@@ -56,8 +56,8 @@ MIN_DUTY_PCT     = 30     # minimum duty % when very close to target
 #   Ascent sensor target = competition_surface + FLOAT_HEIGHT_M - SENSOR_DEPTH_OFFSET_M
 #
 # Both default to 0.0 until measured.  Set them once in config.py.
-SENSOR_DEPTH_OFFSET_M = 0.0   # metres sensor is above float bottom face
-FLOAT_HEIGHT_M        = 0.0   # metres total float body height
+SENSOR_DEPTH_OFFSET_M = 0.145  # metres sensor is above float bottom face (measured)
+FLOAT_HEIGHT_M        = 0.91   # metres total float body height (measured)
 
 # ── Test mode ─────────────────────────────────────────────────────────────────
 # Set TEST_MODE = True for pool tests without the ROV.
