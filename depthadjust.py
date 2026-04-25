@@ -176,8 +176,9 @@ log.addHandler(_sh)
 _depth_bias_m = 0.0
 
 
-_live_t          = 0.0   # throttle live-status writes to ~400 ms
-_mission_start_t = None  # set in main() for elapsed-time calculation
+_live_t           = 0.0   # throttle live-status writes to ~400 ms
+_mission_start_t  = None  # set in main() for elapsed-time calculation
+_prev_live_depth  = None  # for velocity estimate in live status
 
 
 def _write_status(update):
@@ -200,14 +201,18 @@ def _set_stage(stage):
 
 
 def _live_update(depth_m, actuator):
-    """Push current depth/actuator to STATUS_PATH; called every control-loop tick."""
-    global _live_t
+    """Push current depth/actuator/velocity to STATUS_PATH at ~400 ms intervals."""
+    global _live_t, _prev_live_depth
     now = time.time()
-    if now - _live_t < 0.4:
+    dt  = now - _live_t
+    if dt < 0.4:
         return
+    velocity = round((depth_m - _prev_live_depth) / dt, 4) if _prev_live_depth is not None else 0.0
+    _prev_live_depth = depth_m
     _live_t = now
     elapsed = round(now - _mission_start_t, 1) if _mission_start_t else 0.0
-    _write_status({'depth_m': round(depth_m, 3), 'elapsed_s': elapsed, 'actuator': actuator})
+    _write_status({'depth_m': round(depth_m, 3), 'elapsed_s': elapsed,
+                   'actuator': actuator, 'velocity_ms': velocity})
 
 
 def _proportional_duty(dist_m):

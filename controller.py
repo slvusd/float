@@ -622,6 +622,7 @@ def tuning_page():
         <table style="font-size:.86rem;border-collapse:collapse">
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Elapsed</td><td id="l-elapsed" style="font-family:monospace;font-weight:600">—</td></tr>
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Stage</td>  <td id="l-stage"    style="font-weight:600">—</td></tr>
+          <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Velocity</td><td id="l-velocity" style="font-family:monospace;font-weight:600">—</td></tr>
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Motor</td>  <td id="l-actuator" style="font-weight:600">—</td></tr>
           <tr><td style="color:#666;padding:.15rem .7rem .15rem 0">Packets</td><td id="l-packets"  style="font-weight:600">—</td></tr>
         </table>
@@ -726,6 +727,9 @@ function updateLive() {{
     document.getElementById('l-elapsed').textContent = d.elapsed_s != null ? (+d.elapsed_s).toFixed(0)+' s' : '—';
     document.getElementById('l-stage').textContent   = d.stage ? d.stage.replace(/_/g,' ') : '—';
     document.getElementById('l-packets').textContent = d.packets_logged;
+    const vel = d.velocity_ms;
+    document.getElementById('l-velocity').textContent =
+      vel != null ? (vel >= 0 ? '+' : '') + (+vel).toFixed(3) + ' m/s' : '—';
     const act = document.getElementById('l-actuator');
     const astr = d.actuator || '—';
     act.textContent = astr;
@@ -733,7 +737,8 @@ function updateLive() {{
                       astr.includes('extend')  ? '#27ae60' : '#555';
     if (d.depth_m != null) {{
       const m = document.getElementById('g-float');
-      m.style.top        = (_d2y(+d.depth_m) - 5) + 'px';
+      const markerY = Math.max(2, Math.min(_GH - 12, _d2y(+d.depth_m) - 5));
+      m.style.top        = markerY + 'px';
       m.style.background = astr.includes('retract') ? '#c0392b' :
                            astr.includes('extend')  ? '#27ae60' : '#0077b6';
     }}
