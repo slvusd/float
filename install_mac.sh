@@ -63,8 +63,10 @@ echo "  Setup complete!"
 echo
 echo "  To start the simulator:"
 echo "    source .venv/bin/activate"
-echo "    python server.py"
-echo "  Then open:  http://localhost:5000/tuning"
+echo "    FLOAT_PORT=5050 python server.py"
+echo "  Then open:  http://localhost:5050/tuning"
+echo
+echo "  (Port 5000 is reserved by macOS AirPlay — use any other port.)"
 echo
 echo "  Click '🔬 Sim Run (dry)' to run the full physics simulation."
 echo "  The live gauge and plot will show virtual depth in real time."

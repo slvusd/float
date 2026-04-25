@@ -1007,4 +1007,6 @@ if not depth_sensor.initSensor():
     print("WARNING: depth sensor not available at startup — will retry on first /depth request")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    import os as _os
+    _port = int(_os.environ.get('FLOAT_PORT', FLOAT_PORT))
+    app.run(host='0.0.0.0', port=_port, debug=False)
