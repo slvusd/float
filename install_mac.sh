@@ -35,11 +35,13 @@ if [ "$PY_MINOR" -gt 13 ]; then
   echo "      brew install python@3.13   (if you hit issues)"
 fi
 
-# Create venv — fall back to --without-pip + bootstrap for pre-release Pythons
-if [ ! -d ".venv" ]; then
+# Create venv — fall back to --without-pip + bootstrap if ensurepip fails
+if [ ! -f ".venv/bin/activate" ]; then
   echo "Creating virtual environment..."
-  if ! "$PYTHON" -m venv .venv 2>/dev/null; then
-    echo "  (ensurepip failed — creating venv without pip, then bootstrapping)"
+  rm -rf .venv
+  if ! "$PYTHON" -m venv .venv; then
+    echo "  (ensurepip failed — retrying without pip, then bootstrapping)"
+    rm -rf .venv
     "$PYTHON" -m venv .venv --without-pip
     echo "  Downloading get-pip.py..."
     curl -sS https://bootstrap.pypa.io/get-pip.py | .venv/bin/python
