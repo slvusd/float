@@ -319,8 +319,8 @@ def moveToDepth(targetM):
     # when velocity drops to profile) so it cannot over-extend the syringe.
     VMAX      = 0.05   # m/s — absolute speed cap during transit
     VMIN      = 0.007  # m/s — trigger a new forward burst when below this
-    BURST_MAX = 2.0    # max seconds per forward burst
-    OBSERVE_S = 1.0    # settle window after a burst ends
+    BURST_MAX = 1.0    # max seconds per forward burst — keep committed buoyancy small
+    OBSERVE_S = 2.0    # settle window after a burst; long enough to measure velocity
 
     while True:
         current, _ = readTrueDepthAndPressure()
