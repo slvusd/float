@@ -346,51 +346,57 @@ def moveToDepth(targetM):
         v_toward    = velocity if diff < 0 else -velocity
         in_approach = abs(diff) <= _approach_zone
 
-        # Smooth target: ramp from VMAX at approach zone edge → VMIN at target
-        v_target = max(VMIN, VMAX * min(1.0, abs(diff) / max(_approach_zone, 0.01)))
+        if in_approach and v_toward > 0.001:
+            # ── Approach zone: always oppose motion ───────────────────────────
+            # Committed buoyancy accelerates the float regardless of motor state.
+            # The ONLY way to prevent acceleration is to run the opposing motor
+            # continuously whenever the float is moving toward the target.
+            # Duty scales with velocity: gentle when slow, firmer when fast.
+            if burst_start is not None: burst_start = None
+            duty = max(_min_duty, min(_full_duty,
+                       int(_min_duty + (_full_duty - _min_duty) * v_toward / VMAX)))
+            actuator.setDutyCycle(duty)
+            if diff < 0: actuator.extendActuator();  phase = f'brake ↑ {duty}%'
+            else:        actuator.retractActuator(); phase = f'brake ↓ {duty}%'
 
-        if v_toward > v_target:
-            # Overspeed — continuous trim, duty scales with how far above profile
-            # (stops the moment velocity drops to profile; cannot over-shoot)
-            excess     = min(1.0, (v_toward - v_target) / VMAX)
-            trim_duty  = int(_min_duty + (_full_duty - _min_duty) * max(0.3, excess))
+        elif in_approach and v_toward <= 0.001:
+            # Stopped or drifting back inside zone — tiny nudge toward target
+            if burst_start is not None: burst_start = None
+            actuator.setDutyCycle(_min_duty)
+            if diff < 0: actuator.retractActuator(); phase = 'nudge ↓'
+            else:        actuator.extendActuator();  phase = 'nudge ↑'
+
+        elif v_toward > VMAX:
+            # ── Outside zone: hard velocity cap ──────────────────────────────
+            excess    = min(1.0, (v_toward - VMAX) / VMAX)
+            trim_duty = int(_min_duty + (_full_duty - _min_duty) * max(0.3, excess))
+            if burst_start is not None: motor_end = now; burst_start = None
             actuator.setDutyCycle(trim_duty)
-            if burst_start is not None:
-                motor_end = now; burst_start = None
             if diff < 0: actuator.extendActuator();  phase = f'trim ↑ {trim_duty}%'
             else:        actuator.retractActuator(); phase = f'trim ↓ {trim_duty}%'
 
-        elif v_toward >= VMIN or (in_approach and v_toward >= 0):
-            # Adequate speed, or in approach zone — coast, no more forward bursts
-            if burst_start is not None:
-                motor_end = now; burst_start = None
+        elif v_toward >= VMIN:
+            # Coasting at adequate speed
+            if burst_start is not None: motor_end = now; burst_start = None
             actuator.stopActuator(); phase = 'coasting'
 
         elif burst_start is not None and (now - burst_start) < BURST_MAX:
-            # Active forward burst
             actuator.setDutyCycle(_proportional_duty(diff))
             if diff < 0: actuator.retractActuator(); phase = f'burst ↓ {now-burst_start:.1f}s'
             else:        actuator.extendActuator();  phase = f'burst ↑ {now-burst_start:.1f}s'
 
         elif burst_start is not None:
-            # Burst expired → observe
             motor_end = now; burst_start = None
             actuator.stopActuator(); phase = 'observing'
 
         elif motor_end is not None and (now - motor_end) < OBSERVE_S:
-            # Observe window after burst
             actuator.stopActuator(); phase = f'observing {now-motor_end:.1f}s'
 
-        elif not in_approach:
-            # Need more force — start a new burst (outside approach zone only)
+        else:
             burst_start = now
             actuator.setDutyCycle(_proportional_duty(diff))
             if diff < 0: actuator.retractActuator(); phase = 'burst ↓ start'
             else:        actuator.extendActuator();  phase = 'burst ↑ start'
-
-        else:
-            # In approach zone, below VMIN — barely any buoyancy left, just wait
-            actuator.stopActuator(); phase = 'near target'
 
         _live_update(current, phase)
 
