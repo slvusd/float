@@ -16,12 +16,18 @@ from flask import Flask, jsonify, request, send_file, Response
 
 import depthdetect as depth_sensor
 import actuator
-import RPi.GPIO as GPIO
+try:
+    import RPi.GPIO as GPIO
+    _HAS_GPIO = True
+except ImportError:
+    GPIO = None
+    _HAS_GPIO = False
+
 from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     ACTUATOR_DUTY_CYCLE, CONTROL_DEADBAND_M,
                     TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
-                    SENSOR_DEPTH_OFFSET_M, APPROACH_ZONE_M, MIN_DUTY_PCT)
+                    SENSOR_DEPTH_OFFSET_M, FLOAT_HEIGHT_M, APPROACH_ZONE_M, MIN_DUTY_PCT)
 
 app = Flask(__name__)
 
@@ -250,6 +256,8 @@ _gpio_ready = False
 
 def _ensure_gpio():
     global _gpio_ready
+    if not _HAS_GPIO:
+        return
     if not _gpio_ready:
         GPIO.setwarnings(False)
         actuator.setupActuator()
@@ -258,6 +266,8 @@ def _ensure_gpio():
 
 def _release_gpio():
     global _gpio_ready
+    if not _HAS_GPIO:
+        return
     if _gpio_ready:
         actuator.cleanupActuator()
         _gpio_ready = False
@@ -371,6 +381,7 @@ def start_mission():
     if 'sim_rate'        in a:      cmd += ['--sim-rate',        a['sim_rate']]
     if 'approach_zone'   in a:      cmd += ['--approach-zone',   a['approach_zone']]
     if 'min_duty'        in a:      cmd += ['--min-duty',        a['min_duty']]
+    if 'float_height'    in a:      cmd += ['--float-height',    a['float_height']]
     _release_gpio()   # let depthadjust.py claim the pins cleanly
     _mission_proc = subprocess.Popen(cmd, cwd=BASE_DIR)
     return jsonify({'status': 'mission started', 'pid': _mission_proc.pid,
@@ -546,6 +557,7 @@ def get_config():
         'target_surface_m':   TARGET_SURFACE_M,
         'tolerance_m':        TOLERANCE_M,
         'sensor_offset_m':    SENSOR_DEPTH_OFFSET_M,
+        'float_height_m':     FLOAT_HEIGHT_M,
         'approach_zone_m':    APPROACH_ZONE_M,
         'min_duty_pct':       MIN_DUTY_PCT,
         'sim_rate':           0.08,
@@ -655,12 +667,23 @@ def tuning_page():
   <h2>Depth Settings</h2>
 
   <div class="param">
-    <label>Sensor Position Offset (m)</label>
-    <div class="desc">Distance from sensor to the float's bottom reference point (competition measurement face).
-    Sensor target = competition target − offset. Measure once, set in config.py; override here for testing.</div>
+    <label>Float Body Height (m)</label>
+    <div class="desc">Total height of the float body. Used for the ascent target:
+    sensor must be deeper than the surface target by (height − sensor offset) so the
+    <em>top</em> of the float reaches the competition depth. Measure once, set in config.py.</div>
     <div class="row">
-      <input type="number" id="sensor-offset" min="-0.5" max="0.5" step="0.01" value="{SENSOR_DEPTH_OFFSET_M:.3f}"> m
-      <span style="font-size:.8rem;color:#888" id="sensor-note"></span>
+      <input type="number" id="float-height" min="0" max="1.0" step="0.01"
+             value="{FLOAT_HEIGHT_M:.3f}" oninput="updateTargets()"> m
+    </div>
+  </div>
+
+  <div class="param">
+    <label>Sensor Position Offset (m)</label>
+    <div class="desc">Distance from pressure sensor to <em>bottom</em> of float.
+    Descent sensor target = competition depth − offset. Measure once, set in config.py.</div>
+    <div class="row">
+      <input type="number" id="sensor-offset" min="-0.5" max="0.5" step="0.01"
+             value="{SENSOR_DEPTH_OFFSET_M:.3f}" oninput="updateTargets()"> m
     </div>
   </div>
 
@@ -799,10 +822,11 @@ function updateTargets() {{
   const tb  = parseFloat(document.getElementById('target-bottom').value);
   const ts  = parseFloat(document.getElementById('target-surface').value);
   const off = parseFloat(document.getElementById('sensor-offset').value) || 0;
+  const fh  = parseFloat(document.getElementById('float-height').value)  || 0;
   document.getElementById('tb-val').textContent = tb.toFixed(2) + ' m';
   document.getElementById('ts-val').textContent = ts.toFixed(2) + ' m';
   document.getElementById('eff-bottom').textContent  = (tb - off).toFixed(2) + ' m';
-  document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
+  document.getElementById('eff-surface').textContent = (ts + fh - off).toFixed(2) + ' m';
   initGauge();
 }}
 
@@ -816,7 +840,8 @@ function buildUrl(extra='') {{
   const off     = document.getElementById('sensor-offset').value;
   const az      = document.getElementById('approach-zone').value;
   const md      = document.getElementById('min-duty').value;
-  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}${{extra}}`;
+  const fh      = document.getElementById('float-height').value;
+  return `/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{extend}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}&float_height=${{fh}}${{extra}}`;
 }}
 
 let _liveInterval = null;
@@ -974,7 +999,8 @@ def network():
 
 # ── startup ───────────────────────────────────────────────────────────────────
 
-GPIO.setwarnings(False)
+if _HAS_GPIO:
+    GPIO.setwarnings(False)
 # Actuator GPIO is NOT held at startup — claimed per-request so the
 # mission subprocess (depthadjust.py) can always claim the pins cleanly.
 if not depth_sensor.initSensor():

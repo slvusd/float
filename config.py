@@ -44,12 +44,20 @@ ACTUATOR_DUTY_CYCLE  = 80    # H-bridge PWM duty % (100 = full speed, ~80 recomm
 APPROACH_ZONE_M  = 0.50   # metres: start slowing this far from target
 MIN_DUTY_PCT     = 30     # minimum duty % when very close to target
 
-# Physical distance from the depth sensor to the competition reference point
-# (bottom of float for descent, same offset for ascent).
-# Example: sensor mounted 0.15 m above the float's bottom face → SENSOR_DEPTH_OFFSET_M = 0.15
-# Effect: sensor target = competition target - offset
-# (sensor reads shallower than the bottom by this amount)
-SENSOR_DEPTH_OFFSET_M = 0.0
+# Physical float dimensions for accurate competition depth targeting.
+#
+# SENSOR_DEPTH_OFFSET_M: distance from the pressure sensor to the BOTTOM of the
+#   float body.  For descent the competition measures to the bottom face.
+#   Descent sensor target = competition_bottom - SENSOR_DEPTH_OFFSET_M
+#
+# FLOAT_HEIGHT_M: total height of the float body.  For ascent the competition
+#   measures to the TOP face, so the sensor (which is near the bottom) will be
+#   DEEPER than the top by (FLOAT_HEIGHT_M - SENSOR_DEPTH_OFFSET_M).
+#   Ascent sensor target = competition_surface + FLOAT_HEIGHT_M - SENSOR_DEPTH_OFFSET_M
+#
+# Both default to 0.0 until measured.  Set them once in config.py.
+SENSOR_DEPTH_OFFSET_M = 0.0   # metres sensor is above float bottom face
+FLOAT_HEIGHT_M        = 0.0   # metres total float body height
 
 # ── Test mode ─────────────────────────────────────────────────────────────────
 # Set TEST_MODE = True for pool tests without the ROV.

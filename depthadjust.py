@@ -15,7 +15,7 @@ from config import (CALL_SIGN, TARGET_BOTTOM_M, TARGET_SURFACE_M, TOLERANCE_M,
                     NUM_PROFILES, CONTROL_DEADBAND_M, CALIBRATION_SAMPLES,
                     BIAS_FILE, DATA_FILE, CONTROLLER_IP, CONTROLLER_PORT,
                     TEST_MODE, TEST_SURFACE_DELAY_S, TEST_SURFACE_EXTEND_S,
-                    SENSOR_DEPTH_OFFSET_M, ACTUATOR_DUTY_CYCLE,
+                    SENSOR_DEPTH_OFFSET_M, FLOAT_HEIGHT_M, ACTUATOR_DUTY_CYCLE,
                     APPROACH_ZONE_M, MIN_DUTY_PCT)
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ _parser.add_argument('--target-surface',  type=float, default=None, dest='target
 _parser.add_argument('--sensor-offset',   type=float, default=None, dest='sensor_offset')
 _parser.add_argument('--approach-zone',   type=float, default=None, dest='approach_zone')
 _parser.add_argument('--min-duty',        type=float, default=None, dest='min_duty')
+_parser.add_argument('--float-height',    type=float, default=None, dest='float_height')
 _args, _ = _parser.parse_known_args()
 
 # Runtime values — CLI args override config, config is the fallback
@@ -43,11 +44,16 @@ _deadband_m     = _args.deadband        if _args.deadband        is not None els
 _surface_delay  = _args.surface_delay   if _args.surface_delay   is not None else TEST_SURFACE_DELAY_S
 _surface_extend = _args.surface_extend  if _args.surface_extend  is not None else TEST_SURFACE_EXTEND_S
 _sensor_offset  = _args.sensor_offset   if _args.sensor_offset   is not None else SENSOR_DEPTH_OFFSET_M
-_target_bottom  = (_args.target_bottom  if _args.target_bottom  is not None else TARGET_BOTTOM_M)  - _sensor_offset
-_target_surface = (_args.target_surface if _args.target_surface is not None else TARGET_SURFACE_M) - _sensor_offset
+_comp_bottom   = _args.target_bottom  if _args.target_bottom  is not None else TARGET_BOTTOM_M
+_comp_surface  = _args.target_surface if _args.target_surface is not None else TARGET_SURFACE_M
+# Descent: bottom of float at competition depth → sensor is sensor_offset above bottom
+_target_bottom  = _comp_bottom  - _sensor_offset
+# Ascent: top of float at competition surface depth → sensor is (height - offset) below top
+_target_surface = _comp_surface + _float_height - _sensor_offset
 _full_duty      = _args.duty            if _args.duty            is not None else ACTUATOR_DUTY_CYCLE
 _approach_zone  = _args.approach_zone   if _args.approach_zone   is not None else APPROACH_ZONE_M
 _min_duty       = _args.min_duty        if _args.min_duty        is not None else MIN_DUTY_PCT
+_float_height   = _args.float_height    if _args.float_height    is not None else FLOAT_HEIGHT_M
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -287,30 +293,57 @@ def archivePreviousRun():
 
 def moveToDepth(targetM):
     log.info(f"Moving to {targetM:.2f} m...")
-    last_log = time.time() - 2
+    prev_depth = None
+    prev_t     = time.time()
+    velocity   = 0.0
+    last_log   = prev_t - 2
+
     while True:
         current, _ = readTrueDepthAndPressure()
         if current is None:
             time.sleep(0.1)
             continue
+
         now  = time.time()
         diff = current - targetM
+
         if abs(diff) <= TOLERANCE_M:
             actuator.stopActuator()
             log.info(f"Reached target {targetM:.2f} m  (sensor {current:.3f} m)")
             return
-        duty = _proportional_duty(diff)
-        actuator.setDutyCycle(duty)
-        if diff < 0:
-            actuator.retractActuator()
-            _live_update(current, 'retracting ↓')
+
+        # Estimate velocity every ~0.4 s (averaging reduces noise)
+        if prev_depth is None:
+            prev_depth, prev_t = current, now
+        elif (now - prev_t) >= 0.4:
+            velocity   = (current - prev_depth) / (now - prev_t)
+            prev_depth, prev_t = current, now
+
+        # Coast if already moving toward target — let buoyancy do the work.
+        # diff < 0: too shallow, need to sink → want positive velocity (↓)
+        # diff > 0: too deep,    need to rise  → want negative velocity (↑)
+        COAST_V = 0.008   # m/s — minimum "moving usefully" threshold
+        coasting = (diff < 0 and velocity >  COAST_V) or \
+                   (diff > 0 and velocity < -COAST_V)
+
+        if coasting:
+            actuator.stopActuator()
+            _live_update(current, 'coasting')
         else:
-            actuator.extendActuator()
-            _live_update(current, 'extending ↑')
+            duty = _proportional_duty(diff)
+            actuator.setDutyCycle(duty)
+            if diff < 0:
+                actuator.retractActuator()
+                _live_update(current, 'retracting ↓')
+            else:
+                actuator.extendActuator()
+                _live_update(current, 'extending ↑')
+
         if now - last_log >= 2.0:
             direction = "sinking ↓" if diff < 0 else "rising ↑"
             log.info(f"  {direction}  sensor {current:.3f} m  target {targetM:.2f} m"
-                     f"  diff {diff:+.3f} m  duty {duty}%")
+                     f"  diff {diff:+.3f} m  vel {velocity:+.4f} m/s"
+                     + ("  [coasting]" if coasting else f"  duty {_proportional_duty(diff)}%"))
             last_log = now
         time.sleep(0.1)
 
@@ -372,7 +405,8 @@ def holdDepthAndLog(targetM, mission_start):
 def executeProfile(number, mission_start):
     log.info(f"\n=== Profile {number} of {NUM_PROFILES} ===")
     log.info(f"Sensor targets: bottom {_target_bottom:.2f} m, surface {_target_surface:.2f} m"
-             + (f"  (offset {_sensor_offset:+.3f} m)" if _sensor_offset else ""))
+             + (f"  (offset {_sensor_offset:+.3f} m, height {_float_height:.3f} m)"
+                if _sensor_offset or _float_height else ""))
     packets = []
     _set_stage(f"profile_{number}_descent")
     moveToDepth(_target_bottom)

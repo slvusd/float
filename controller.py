@@ -400,7 +400,8 @@ def tuning_page():
     tol          = cfg.get('tolerance_m',        TOLERANCE_M)
     offset       = cfg.get('sensor_offset_m',    0.0)
     approach_zone = cfg.get('approach_zone_m',   0.50)
-    min_duty     = cfg.get('min_duty_pct',       30)
+    min_duty      = cfg.get('min_duty_pct',      30)
+    float_height  = cfg.get('float_height_m',    0.0)
     float_ok = bool(cfg)
 
     html = f"""<!DOCTYPE html>
@@ -513,8 +514,18 @@ def tuning_page():
     <h2>Depth Settings</h2>
 
     <div class="param">
-      <label>Sensor Position Offset (m)</label>
-      <div class="desc">Distance from sensor to float's bottom reference face. Sensor target = competition target − offset.</div>
+      <label>Float Body Height (m)</label>
+      <div class="desc">Total float height. Ascent sensor target = competition surface + height − offset
+        (so the <em>top</em> face reaches the competition depth).</div>
+      <div class="row">
+        <input type="number" id="float-height" min="0" max="1.0" step="0.01"
+               value="{float_height:.3f}" oninput="updateTargets()"> m
+      </div>
+    </div>
+
+    <div class="param">
+      <label>Sensor Offset (m)</label>
+      <div class="desc">Distance from sensor to <em>bottom</em> of float. Descent sensor target = competition depth − offset.</div>
       <div class="row">
         <input type="number" id="sensor-offset" min="-0.5" max="0.5" step="0.01" value="{offset:.3f}"
                oninput="updateTargets()"> m
@@ -667,10 +678,11 @@ function updateTargets() {{
   const tb  = parseFloat(document.getElementById('target-bottom').value);
   const ts  = parseFloat(document.getElementById('target-surface').value);
   const off = parseFloat(document.getElementById('sensor-offset').value) || 0;
+  const fh  = parseFloat(document.getElementById('float-height').value)  || 0;
   document.getElementById('tb-val').textContent = tb.toFixed(2) + ' m';
   document.getElementById('ts-val').textContent = ts.toFixed(2) + ' m';
   document.getElementById('eff-bottom').textContent  = (tb - off).toFixed(2) + ' m';
-  document.getElementById('eff-surface').textContent = (ts - off).toFixed(2) + ' m';
+  document.getElementById('eff-surface').textContent = (ts + fh - off).toFixed(2) + ' m';
   initGauge();
 }}
 
@@ -684,7 +696,8 @@ function buildCmd(extra='') {{
   const off    = document.getElementById('sensor-offset').value;
   const az     = document.getElementById('approach-zone').value;
   const md     = document.getElementById('min-duty').value;
-  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}${{extra}}`;
+  const fh     = document.getElementById('float-height').value;
+  return `/float/start?test=true&duty=${{duty}}&deadband=${{db}}&surface_delay=${{delay}}&surface_extend=${{ext}}&target_bottom=${{tb}}&target_surface=${{ts}}&sensor_offset=${{off}}&approach_zone=${{az}}&min_duty=${{md}}&float_height=${{fh}}${{extra}}`;
 }}
 
 let _liveInterval = null;
